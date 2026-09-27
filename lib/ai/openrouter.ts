@@ -40,12 +40,10 @@ export async function chatWithOpenRouter(
 
   const toolResults: { toolName: string; result: string }[] = [];
 
-  // Thử các model theo thứ tự (fallback tự động trong nội bộ OpenRouter)
-  // Các model free thường có trên OpenRouter:
+  // Thử các model theo thứ tự (ưu tiên model nhanh nhất đã test)
   const modelsToTry = [
-    'google/gemini-2.5-flash',
-    'google/gemini-2.5-pro',
     'meta-llama/llama-3.3-70b-instruct',
+    'google/gemini-2.5-flash',
     'mistralai/mixtral-8x7b-instruct'
   ];
 
@@ -58,8 +56,8 @@ export async function chatWithOpenRouter(
         messages,
         tools: tools ?? TOOLS,
         tool_choice: 'auto',
-        max_tokens: 400,
-        temperature: 0.75,
+        max_tokens: 300,
+        temperature: 0.7,
       });
 
       let assistantMessage = chatResponse.choices[0].message;

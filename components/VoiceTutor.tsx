@@ -16,6 +16,7 @@ import { Mic, MicOff, Volume2, RotateCcw, Sparkles, Square } from 'lucide-react'
 import { useSettings } from './SettingsContext';
 import { generateId, blobToBase64, getBestAudioMimeType } from '@/lib/audio-utils';
 import type { SupportedLanguage, ConversationMessage, VoiceChatRequest, VoiceChatResponse, SyllableAssessment } from '@/lib/types';
+import { parseAIResponse } from '@/app/api/voice-chat/route';
 
 type TutorState = 'idle' | 'listening' | 'waiting' | 'thinking' | 'speaking';
 
@@ -171,6 +172,7 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef(0);
   const timeRef = useRef(0);
+  const startListeningRef = useRef<() => void>(() => {});
 
   // Đồng bộ refs với props/state
   useEffect(() => { settingsRef.current = settings; }, [settings]);
@@ -349,10 +351,22 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
       const recorder = mediaRecorderRef.current;
       if (recorder && recorder.state !== 'inactive') {
         await new Promise<void>((resolve) => {
-          recorder.onstop = () => resolve();
-          recorder.stop();
+          const timer = setTimeout(() => resolve(), 300);
+          recorder.addEventListener('stop', () => {
+            clearTimeout(timer);
+            resolve();
+          }, { once: true });
+          try {
+            recorder.stop();
+          } catch {
+            clearTimeout(timer);
+            resolve();
+          }
         });
       }
+      // Nhường event loop 40ms để ondataavailable hoàn tất đẩy chunk cuối cùng vào mảng
+      await new Promise((r) => setTimeout(r, 40));
+
       if (audioChunksRef.current.length > 0) {
         const mimeType = getBestAudioMimeType();
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
@@ -367,11 +381,48 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
     return undefined;
   }, []);
 
-  // ─── Gửi transcript & audio đến AI ────────────────────────
-  const sendToAI = useCallback(async (text: string, audioBase64?: string) => {
-    if (!text.trim() || isProcessingRef.current) return;
+  // ─── Đánh giá phát âm song song ngầm không làm chậm AI response ─
+  const runPronunciationAssessment = useCallback(async (audioBase64: string, referenceText: string, userMsgId: string) => {
+    if (!audioBase64 || !referenceText.trim()) return;
+    console.log('[PERF] pronunciation_start', Date.now());
 
-    isProcessingRef.current = true;
+    try {
+      const resp = await fetch('/api/voice-chat/pronounce', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audioBase64,
+          referenceText,
+          language: languageRef.current,
+        }),
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        console.log('[PERF] pronunciation_end', Date.now(), data.latencyMs ? `duration: ${data.latencyMs}ms` : '');
+
+        if (data.pronunciationResult || typeof data.pronunciationScore === 'number' || data.userRomanization || data.userPinyin) {
+          setConversation((prev) =>
+            prev.map((msg) =>
+              msg.id === userMsgId
+                ? {
+                    ...msg,
+                    pronunciationResult: data.pronunciationResult,
+                    pronunciationScore: typeof data.pronunciationScore === 'number' ? data.pronunciationScore : (data.pronunciationResult?.overallScore ?? null),
+                    romanization: data.userRomanization || data.userPinyin || msg.romanization,
+                  }
+                : msg
+            )
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('[Pronunciation] background assessment error:', err);
+    }
+  }, []);
+
+  // ─── Gửi transcript & audio đến AI (Streaming + Low Latency) ───
+  const sendToAI = useCallback(async (text: string, existingUserMsgId?: string, fallbackAudioBase64?: string) => {
     lastSpeechTimeRef.current = 0;
     setInterimTranscript('');
     setFinalTranscript('');
@@ -382,92 +433,266 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
     interimTranscriptRef.current = '';
 
     const startTime = Date.now();
+    console.log('[PERF] api_request_start', startTime);
+
+    const history = conversationRef.current.slice(-8).map((m) => ({
+      role: m.role,
+      content: m.original || m.text || '',
+    }));
+
+    const afterSpeak = () => {
+      setTutorState('idle');
+      isProcessingRef.current = false;
+      if (sessionActiveRef.current) {
+        setTimeout(() => {
+          if (sessionActiveRef.current && !isProcessingRef.current) {
+            startListeningRef.current?.();
+          }
+        }, 600);
+      }
+    };
 
     try {
-      // Chỉ gửi câu original sạch vào history context của LLM (không gửi format, không gửi JSON)
-      const history = conversationRef.current.slice(-8).map((m) => ({
-        role: m.role,
-        content: m.original || m.text || '',
-      }));
-
       const body: VoiceChatRequest = {
-        text,
+        text: text || undefined,
+        audioBase64: fallbackAudioBase64,
         language: languageRef.current,
         level: settingsRef.current.level,
         topic: topicRef.current,
         history,
         voice: settingsRef.current.voice,
         speed: settingsRef.current.speed,
-        audioBase64,
+        skipPronunciation: !fallbackAudioBase64,
+        stream: true,
       };
 
       const resp = await fetch('/api/voice-chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+        },
         body: JSON.stringify(body),
       });
 
-      const data: VoiceChatResponse = await resp.json();
+      const contentType = resp.headers.get('content-type') || '';
 
-      if (data.error) {
-        setError(data.error);
-        setTutorState('idle');
-        isProcessingRef.current = false;
-        return;
-      }
+      if (contentType.includes('text/event-stream') && resp.body) {
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let assistantMsgId = '';
+        let currentUserMsgId = existingUserMsgId;
+        let accumulatedRaw = '';
+        let assistantOriginal = '';
+        let assistantRomanization = '';
+        let assistantTranslation = '';
+        let ttsFired = false;
+        let firstTokenLogged = false;
 
-      // Thêm tin nhắn của User vào lịch sử cùng với điểm phát âm và Pinyin (nếu có)
-      if (data.userTranscript) {
-        const userMsg: ConversationMessage = {
-          id: generateId(),
-          role: 'user',
-          original: data.userTranscript,
-          romanization: data.userRomanization || data.userPinyin || '',
-          pronunciationResult: data.pronunciationResult,
-          pronunciationScore: data.pronunciationResult?.overallScore ?? null,
-          text: data.userTranscript,
-          timestamp: Date.now(),
-        };
-        setConversation((prev) => [...prev, userMsg]);
-      }
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-      // Thêm tin nhắn của AI (đã phân tách rõ original cho TTS, romanization & translation cho UI)
-      const assistantOriginal = cleanOriginalString(data.assistantOriginal || data.assistantText || '');
-      if (assistantOriginal) {
-        const assistantMsg: ConversationMessage = {
-          id: generateId(),
-          role: 'assistant',
-          original: assistantOriginal,
-          romanization: data.assistantRomanization || '',
-          translation: data.assistantTranslation || '',
-          text: assistantOriginal,
-          audioBase64: data.audioBase64 || undefined,
-          timestamp: Date.now(),
-          toolResults: data.toolResults,
-        };
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
 
-        setConversation((prev) => [...prev, assistantMsg]);
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const dataStr = trimmed.replace(/^data:\s*/, '');
+            if (!dataStr) continue;
 
-        setTutorState('speaking');
+            try {
+              const evt = JSON.parse(dataStr);
+              if (evt.type === 'init' && evt.userTranscript && !currentUserMsgId) {
+                currentUserMsgId = generateId();
+                setConversation((prev) => [
+                  ...prev,
+                  {
+                    id: currentUserMsgId!,
+                    role: 'user',
+                    original: evt.userTranscript,
+                    romanization: '',
+                    pronunciationScore: null,
+                    text: evt.userTranscript,
+                    timestamp: Date.now(),
+                  },
+                ]);
+              } else if (evt.type === 'token') {
+                if (!firstTokenLogged) {
+                  console.log('[PERF] llm_first_token', Date.now(), `ttft: ${Date.now() - startTime}ms`);
+                  firstTokenLogged = true;
+                  setTutorState('speaking');
+                }
+                accumulatedRaw += evt.chunk;
 
-        const afterSpeak = () => {
+                const parsed = parseAIResponse(accumulatedRaw);
+                const currentOriginal = cleanOriginalString(parsed.original);
+
+                if (!assistantMsgId) {
+                  assistantMsgId = generateId();
+                  setConversation((prev) => [
+                    ...prev,
+                    {
+                      id: assistantMsgId,
+                      role: 'assistant',
+                      original: currentOriginal,
+                      romanization: '',
+                      translation: '',
+                      text: currentOriginal,
+                      timestamp: Date.now(),
+                    },
+                  ]);
+                } else if (currentOriginal) {
+                  assistantOriginal = currentOriginal;
+                  setConversation((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantMsgId
+                        ? { ...m, original: assistantOriginal, text: assistantOriginal }
+                        : m
+                    )
+                  );
+                }
+              } else if (evt.type === 'done') {
+                console.log('[PERF] response_render', Date.now(), `total: ${Date.now() - startTime}ms`);
+                assistantOriginal = cleanOriginalString(evt.assistantOriginal || assistantOriginal);
+                assistantRomanization = evt.assistantRomanization || '';
+                assistantTranslation = evt.assistantTranslation || '';
+
+                // Cập nhật điểm phát âm & Pinyin cho user message
+                if (currentUserMsgId) {
+                  setConversation((prev) =>
+                    prev.map((m) =>
+                      m.id === currentUserMsgId
+                        ? {
+                            ...m,
+                            romanization: evt.userRomanization || evt.userPinyin || m.romanization,
+                            pronunciationResult: evt.pronunciationResult || m.pronunciationResult,
+                            pronunciationScore: typeof evt.pronunciationScore === 'number'
+                              ? evt.pronunciationScore
+                              : (evt.pronunciationResult?.overallScore ?? m.pronunciationScore),
+                          }
+                        : m
+                    )
+                  );
+                }
+
+                if (!assistantMsgId) {
+                  assistantMsgId = generateId();
+                  setConversation((prev) => [
+                    ...prev,
+                    {
+                      id: assistantMsgId,
+                      role: 'assistant',
+                      original: assistantOriginal,
+                      romanization: assistantRomanization,
+                      translation: assistantTranslation,
+                      text: assistantOriginal,
+                      timestamp: Date.now(),
+                    },
+                  ]);
+                } else {
+                  setConversation((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantMsgId
+                        ? {
+                            ...m,
+                            original: assistantOriginal,
+                            romanization: assistantRomanization,
+                            translation: assistantTranslation,
+                            text: assistantOriginal,
+                          }
+                        : m
+                    )
+                  );
+                }
+
+                if (!ttsFired && assistantOriginal) {
+                  ttsFired = true;
+                  speakWithBrowser(assistantOriginal, afterSpeak);
+                }
+              } else if (evt.type === 'error') {
+                setError(evt.error || 'Lỗi xử lý AI.');
+              }
+            } catch {}
+          }
+        }
+
+        if (!ttsFired && assistantOriginal) {
+          ttsFired = true;
+          speakWithBrowser(assistantOriginal, afterSpeak);
+        } else if (!assistantOriginal && !ttsFired) {
           setTutorState('idle');
           isProcessingRef.current = false;
-          // Tự động lắng nghe lại sau khi AI nói xong
-          if (sessionActiveRef.current) {
-            setTimeout(() => {
-              if (sessionActiveRef.current && !isProcessingRef.current) {
-                startListening();
-              }
-            }, 600);
-          }
-        };
+        }
 
-        // Browser SpeechSynthesis là TTS DUY NHẤT — TUYỆT ĐỐI CHỈ ĐỌC assistantOriginal!
-        speakWithBrowser(assistantOriginal, afterSpeak);
       } else {
-        setTutorState('idle');
-        isProcessingRef.current = false;
+        const data: VoiceChatResponse = await resp.json();
+        console.log('[PERF] response_render', Date.now(), `total: ${Date.now() - startTime}ms`);
+
+        if (data.error) {
+          setError(data.error);
+          setTutorState('idle');
+          isProcessingRef.current = false;
+          return;
+        }
+
+        if (existingUserMsgId) {
+          setConversation((prev) =>
+            prev.map((m) =>
+              m.id === existingUserMsgId
+                ? {
+                    ...m,
+                    romanization: data.userRomanization || data.userPinyin || m.romanization,
+                    pronunciationResult: data.pronunciationResult || m.pronunciationResult,
+                    pronunciationScore: typeof data.pronunciationScore === 'number'
+                      ? data.pronunciationScore
+                      : (data.pronunciationResult?.overallScore ?? m.pronunciationScore),
+                  }
+                : m
+            )
+          );
+        } else if (data.userTranscript) {
+          setConversation((prev) => [
+            ...prev,
+            {
+              id: generateId(),
+              role: 'user',
+              original: data.userTranscript,
+              romanization: data.userRomanization || data.userPinyin || '',
+              pronunciationResult: data.pronunciationResult,
+              pronunciationScore: data.pronunciationResult?.overallScore ?? null,
+              text: data.userTranscript,
+              timestamp: Date.now(),
+            },
+          ]);
+        }
+
+        const assistantOriginal = cleanOriginalString(data.assistantOriginal || data.assistantText || '');
+        if (assistantOriginal) {
+          setConversation((prev) => [
+            ...prev,
+            {
+              id: generateId(),
+              role: 'assistant',
+              original: assistantOriginal,
+              romanization: data.assistantRomanization || '',
+              translation: data.assistantTranslation || '',
+              text: assistantOriginal,
+              audioBase64: data.audioBase64 || undefined,
+              timestamp: Date.now(),
+              toolResults: data.toolResults,
+            },
+          ]);
+
+          setTutorState('speaking');
+          speakWithBrowser(assistantOriginal, afterSpeak);
+        } else {
+          setTutorState('idle');
+          isProcessingRef.current = false;
+        }
       }
     } catch (err) {
       console.error('sendToAI error:', err);
@@ -475,11 +700,58 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
       setTutorState('idle');
       isProcessingRef.current = false;
     }
-  }, [stopAudio, speakWithBrowser]);
+  }, [speakWithBrowser]);
 
   // Ref để silence interval có thể gọi sendToAI mà không stale
   const sendToAIRef = useRef(sendToAI);
   useEffect(() => { sendToAIRef.current = sendToAI; }, [sendToAI]);
+
+  // ─── Kích hoạt gửi nhanh & song song ─────────────────────
+  const triggerSend = useCallback(async () => {
+    if (isProcessingRef.current) return;
+    const text = (accumulatedFinalRef.current.trim() || interimTranscriptRef.current.trim());
+    if (!text && !mediaRecorderRef.current) return;
+
+    console.log('[PERF] recording_end', Date.now());
+    lastSpeechTimeRef.current = 0;
+    setSilenceCountdown(null);
+    isProcessingRef.current = true;
+
+    try { recognitionRef.current?.abort(); } catch {}
+
+    // Lấy audio base64 một cách an toàn (chỉ mất ~20-30ms)
+    const audioBase64 = await stopAndGetAudioBase64();
+
+    if (text) {
+      // 1. User message được đưa ngay vào UI
+      const userMsgId = generateId();
+      setConversation((prev) => [
+        ...prev,
+        {
+          id: userMsgId,
+          role: 'user',
+          original: text,
+          romanization: '',
+          pronunciationScore: null,
+          text,
+          timestamp: Date.now(),
+        },
+      ]);
+      console.log('[PERF] response_render', Date.now(), '(user message added)');
+
+      // 2. Gửi request LLM kèm audioBase64 để server xử lý song song chat và phát âm
+      sendToAIRef.current(text, userMsgId, audioBase64);
+    } else if (audioBase64) {
+      // Fallback khi không có Web Speech API: Dùng Whisper STT
+      sendToAIRef.current('', undefined, audioBase64);
+    } else {
+      isProcessingRef.current = false;
+      setTutorState('idle');
+    }
+  }, [stopAndGetAudioBase64]);
+
+  const triggerSendRef = useRef(triggerSend);
+  useEffect(() => { triggerSendRef.current = triggerSend; }, [triggerSend]);
 
   // ─── Khởi động một chu kỳ lắng nghe ─────────────────────
   const startListening = useCallback(() => {
@@ -552,6 +824,10 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
     try { recognition.start(); } catch (e) { console.warn('Recognition start error:', e); }
   }, [startRecordingAudio]);
 
+  useEffect(() => {
+    startListeningRef.current = startListening;
+  }, [startListening]);
+
   // Tự động khởi động lại lắng nghe với ngôn ngữ mới CHỈ KHI người dùng thực sự đổi ngôn ngữ
   useEffect(() => {
     if (prevLanguageRef.current !== language) {
@@ -577,15 +853,8 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
       const text = (accumulatedFinalRef.current.trim() || interimTranscriptRef.current.trim());
 
       if (text && silenceMs >= SILENCE_MS) {
-        // Đủ 3s im lặng → dừng recognition & lấy audio → gửi
-        lastSpeechTimeRef.current = 0;
-        setSilenceCountdown(null);
-        isProcessingRef.current = true;
-        try { recognitionRef.current?.abort(); } catch {}
-        stopAndGetAudioBase64().then((audioBase64) => {
-          isProcessingRef.current = false;
-          sendToAIRef.current(text, audioBase64);
-        });
+        // Đủ 3s im lặng → kích hoạt gửi nhanh song song
+        triggerSendRef.current();
       } else if (text && silenceMs >= WAITING_SHOW_MS) {
         // Đủ 1.2s → hiển thị "Đang chờ..."
         const remaining = Math.max(0, (SILENCE_MS - silenceMs) / 1000);
@@ -601,6 +870,13 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
   const startSession = useCallback(async () => {
     setError('');
     sessionActiveRef.current = true;
+    try {
+      if (!mediaStreamRef.current || !mediaStreamRef.current.active) {
+        mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+    } catch (e) {
+      console.warn('getUserMedia error on session start:', e);
+    }
     startListening();
   }, [startListening]);
 
@@ -684,22 +960,14 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
     } else if (tutorState === 'thinking') {
       stopSession();
     } else if (tutorState === 'listening' || tutorState === 'waiting') {
-      // Gửi ngay nếu có nội dung
-      const text = accumulatedFinalRef.current.trim();
-      if (text && !isProcessingRef.current) {
-        lastSpeechTimeRef.current = 0;
-        setSilenceCountdown(null);
-        isProcessingRef.current = true;
-        try { recognitionRef.current?.abort(); } catch {}
-        stopAndGetAudioBase64().then((audioBase64) => {
-          isProcessingRef.current = false;
-          sendToAIRef.current(text, audioBase64);
-        });
+      const text = (accumulatedFinalRef.current.trim() || interimTranscriptRef.current.trim());
+      if (text) {
+        triggerSend();
       } else {
         stopSession();
       }
     }
-  }, [tutorState, startSession, stopAudio, stopSession, stopAndGetAudioBase64]);
+  }, [tutorState, startSession, stopAudio, stopSession, triggerSend]);
 
   // ─── Render ───────────────────────────────────────────────
   const isActive = tutorState !== 'idle';

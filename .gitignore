@@ -37,3 +37,6 @@ scratch/
 test-*.js
 test_*.js
 Untitled*
+
+.vercel
+.env*

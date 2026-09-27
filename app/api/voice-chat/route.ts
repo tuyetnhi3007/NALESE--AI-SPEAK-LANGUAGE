@@ -2,24 +2,25 @@
 // app/api/voice-chat/route.ts — Unified Voice Chat Pipeline
 //
 // Pipeline (ưu tiên free, bảo mật key hoàn toàn ở server):
-//   STT:  text (Web Speech API, free) → Groq Whisper → OpenAI Whisper
-//   LLM:  Gemini 2.0 Flash → OpenAI GPT-4o
+//   STT:  text (Web Speech API, free) → Groq Whisper
+//   LLM:  Gemini 3.5 Flash Lite (siêu nhanh ~800ms) → Groq (Llama/Qwen)
 //   TTS:  Browser SpeechSynthesis (Client-side)
 //
-// API key KHÔNG BAO GIỜ được gửi xuống client.
-// clientApiKey (x-api-key header) chỉ dùng làm OpenAI fallback key.
+// Tối ưu hóa:
+//   - Hỗ trợ Stream SSE (First token ~600-900ms)
+//   - Hỗ trợ song song hóa Pronunciation qua skipPronunciation flag
+//   - Internal logs đo latency [PERF]
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server';
-import { transcribeAudio, chatWithAI } from '@/lib/ai';
+import { transcribeAudio, chatWithAI, chatWithAIStream } from '@/lib/ai';
 import { assessPronunciation, getPronunciationConfig } from '@/lib/ai/pronunciation';
 import type { VoiceChatRequest, VoiceChatResponse, PronunciationAssessmentResult } from '@/lib/types';
+import { ensureRomaji } from '@/lib/japanese';
 
 export const maxDuration = 60;
 
-import { ensureRomaji } from '@/lib/japanese';
-
-function parseAIResponse(raw: string): { original: string; romanization: string; translation: string; userRomanization?: string } {
+export function parseAIResponse(raw: string): { original: string; romanization: string; translation: string; userRomanization?: string } {
   if (!raw) return { original: '', romanization: '', translation: '' };
   
   let cleaned = raw.trim();
@@ -76,15 +77,26 @@ function parseAIResponse(raw: string): { original: string; romanization: string;
   };
 }
 
-export async function POST(request: NextRequest): Promise<NextResponse> {
+export async function POST(request: NextRequest): Promise<Response> {
   const startTime = Date.now();
+  console.log('[PERF] api_request_start', startTime);
 
   try {
     const body: VoiceChatRequest = await request.json();
-    const { text, audioBase64, language, level, topic, history, voice, speed = 1.0, vocabContext } = body;
+    const {
+      text,
+      audioBase64,
+      language,
+      level,
+      topic,
+      history,
+      voice,
+      speed = 1.0,
+      vocabContext,
+      skipPronunciation = false,
+      stream = false,
+    } = body;
 
-    // clientApiKey: key từ UI settings (chỉ dùng làm OpenAI fallback)
-    // KHÔNG bao giờ log hoặc trả về key này
     const clientApiKey = request.headers.get('x-api-key') || body.apiKey || undefined;
 
     if (!text && !audioBase64) {
@@ -92,23 +104,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     // ─────────────────────────────────────────────────────
-    // STEP 1: Lấy transcript
-    // Ưu tiên: text (Web Speech API, miễn phí, không cần server)
-    // Fallback: Groq Whisper → OpenAI Whisper
+    // STEP 1: Lấy transcript (STT)
     // ─────────────────────────────────────────────────────
     let userTranscript = '';
     let sttProvider = 'web-speech';
 
+    console.log('[PERF] stt_start', Date.now());
     if (text?.trim()) {
-      // Web Speech API đã transcribe sẵn ở client — hoàn toàn miễn phí
       userTranscript = text.trim();
       sttProvider = 'web-speech';
     } else if (audioBase64) {
-      // Audio từ MediaRecorder → Groq hoặc OpenAI Whisper
       const sttResult = await transcribeAudio(audioBase64, language, clientApiKey);
       userTranscript = sttResult.transcript;
       sttProvider = sttResult.provider;
     }
+    console.log('[PERF] stt_end', Date.now(), `provider: ${sttProvider}, transcript: "${userTranscript}"`);
 
     if (!userTranscript) {
       return NextResponse.json<VoiceChatResponse>({
@@ -120,20 +130,138 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       });
     }
 
+    const isJapanese = (language as string) === 'ja' || (language as string) === 'ja-JP';
+    const isChinese = (language as string) === 'zh' || (language as string) === 'zh-CN';
+
     // ─────────────────────────────────────────────────────
-    // STEP 2: LLM & Pronunciation Assessment (Chạy song song)
+    // Pronunciation Assessment (chạy song song cho cả Stream và Standard mode)
+    // ─────────────────────────────────────────────────────
+    const pronConfig = getPronunciationConfig(language);
+    const shouldAssessPron = !skipPronunciation && pronConfig?.enabled && Boolean(userTranscript.trim()) && Boolean(audioBase64);
+
+    const pronPromise: Promise<PronunciationAssessmentResult | undefined> = shouldAssessPron
+      ? assessPronunciation({
+          audioBase64: audioBase64!,
+          referenceText: userTranscript,
+          language,
+        }).catch((err) => {
+          console.warn('[Pronunciation] assessment error:', err);
+          return undefined;
+        })
+      : Promise.resolve(undefined);
+
+    // ─────────────────────────────────────────────────────
+    // STEP 2A: STREAMING MODE (SSE)
+    // ─────────────────────────────────────────────────────
+    const wantsStream = stream || request.headers.get('accept')?.includes('text/event-stream');
+    if (wantsStream) {
+      const encoder = new TextEncoder();
+
+      const readableStream = new ReadableStream({
+        async start(controller) {
+          try {
+            // Gửi event userTranscript trước
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ type: 'init', userTranscript, sttProvider })}\n\n`)
+            );
+
+            let accumulatedText = '';
+            let lastProvider = 'gemini';
+
+            const streamGen = chatWithAIStream({
+              language,
+              level,
+              topic,
+              history,
+              userMessage: userTranscript,
+              vocabContext,
+              clientApiKey,
+            });
+
+            for await (const { chunk, provider } of streamGen) {
+              lastProvider = provider;
+              accumulatedText += chunk;
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ type: 'token', chunk })}\n\n`)
+              );
+            }
+
+            // Chờ kết quả đánh giá phát âm chạy song song hoàn tất
+            const pronRes = await pronPromise;
+            let pronunciationResult: PronunciationAssessmentResult | undefined = undefined;
+            let userPinyin: string | undefined = undefined;
+            if (pronRes) {
+              pronunciationResult = pronRes;
+              if (pronRes.syllables && pronRes.syllables.length > 0) {
+                userPinyin = pronRes.syllables.map((s) => s.pinyin).filter(Boolean).join(' ');
+              }
+            }
+
+            // Kết thúc stream: Parse kết quả cuối cùng
+            const parsed = parseAIResponse(accumulatedText);
+            const assistantOriginal = parsed.original;
+            const assistantRomanization = isJapanese
+              ? ensureRomaji(parsed.romanization, assistantOriginal)
+              : (isChinese ? parsed.romanization : '');
+            const assistantTranslation = parsed.translation;
+
+            let userRomanization: string | undefined = undefined;
+            if (isChinese) {
+              userRomanization = userPinyin || parsed.userRomanization;
+            } else if (isJapanese) {
+              userRomanization = parsed.userRomanization
+                ? ensureRomaji(parsed.userRomanization)
+                : ensureRomaji('', userTranscript);
+            } else {
+              userRomanization = parsed.userRomanization;
+            }
+
+            const latencyMs = Date.now() - startTime;
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: 'done',
+                  userTranscript,
+                  userPinyin,
+                  userRomanization,
+                  pronunciationResult,
+                  pronunciationScore: pronunciationResult?.overallScore ?? null,
+                  assistantOriginal,
+                  assistantRomanization,
+                  assistantTranslation,
+                  assistantText: assistantOriginal,
+                  latencyMs,
+                  sttProvider,
+                  llmProvider: lastProvider,
+                  ttsProvider: 'browser-tts',
+                })}\n\n`
+              )
+            );
+            controller.close();
+          } catch (err: any) {
+            console.error('[voice-chat-stream] Error:', err);
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ type: 'error', error: err.message || 'Lỗi stream' })}\n\n`)
+            );
+            controller.close();
+          }
+        },
+      });
+
+      return new Response(readableStream, {
+        headers: {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache, no-transform',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
+
+    // ─────────────────────────────────────────────────────
+    // STEP 2B: STANDARD JSON MODE
     // ─────────────────────────────────────────────────────
     let pronunciationResult: PronunciationAssessmentResult | undefined = undefined;
     let userPinyin: string | undefined = undefined;
-
-    const pronConfig = getPronunciationConfig(language);
-    const pronPromise = (pronConfig?.enabled && Boolean(userTranscript.trim()))
-      ? assessPronunciation({
-          audioBase64,
-          referenceText: userTranscript,
-          language,
-        })
-      : Promise.resolve(undefined);
 
     const chatPromise = chatWithAI({
       language,
@@ -142,7 +270,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       history,
       userMessage: userTranscript,
       vocabContext,
-      clientApiKey, // Chỉ dùng nếu Gemini không khả dụng
+      clientApiKey,
     });
 
     const [pronRes, chatResult] = await Promise.all([pronPromise, chatPromise]);
@@ -154,30 +282,24 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     }
 
-    // TÁCH BIỆT HOÀN TOÀN: original (cho TTS) và romanization/translation (cho UI)
     const parsed = parseAIResponse(chatResult.text || '');
     const assistantOriginal = parsed.original;
-    const isJapanese = (language as string) === 'ja' || (language as string) === 'ja-JP';
-    const isChinese = (language as string) === 'zh' || (language as string) === 'zh-CN';
 
-    // Đảm bảo tiếng Nhật luôn có Romaji chữ Latin (tuyệt đối không để Hiragana/Katakana lọt vào dòng 2)
     const assistantRomanization = isJapanese
       ? ensureRomaji(parsed.romanization, assistantOriginal)
       : (isChinese ? parsed.romanization : '');
 
     const assistantTranslation = parsed.translation;
 
-    // userRomanization:
-    // Tiếng Trung: userPinyin
-    // Tiếng Nhật: Romaji chữ Latin (từ AI hoặc chuyển đổi kana)
-    // Tiếng Anh: undefined
     let userRomanization: string | undefined = undefined;
     if (isChinese) {
-      userRomanization = userPinyin;
+      userRomanization = userPinyin || parsed.userRomanization;
     } else if (isJapanese) {
       userRomanization = parsed.userRomanization
         ? ensureRomaji(parsed.userRomanization)
         : ensureRomaji('', userTranscript);
+    } else {
+      userRomanization = parsed.userRomanization;
     }
 
     const latencyMs = Date.now() - startTime;
@@ -187,11 +309,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       userPinyin,
       userRomanization,
       pronunciationResult,
+      pronunciationScore: pronunciationResult?.overallScore ?? null,
       assistantOriginal,
       assistantRomanization,
       assistantTranslation,
-      assistantText: assistantOriginal, // Backward-compatible alias
-      audioBase64: '', // TTS hoàn toàn chạy qua Browser SpeechSynthesis trên client
+      assistantText: assistantOriginal,
+      audioBase64: '',
       toolResults: chatResult.toolResults,
       latencyMs,
       sttProvider,
@@ -203,9 +326,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     console.error('[voice-chat] Error:', error);
     const message = error instanceof Error ? error.message : 'Lỗi không xác định.';
 
-    // Phân loại lỗi → thông báo hữu ích cho người dùng
     let userMessage = `Lỗi xử lý: ${message}`;
-
     if (message.includes('Tất cả LLM đều lỗi')) {
       userMessage = 'Mình đang gặp một chút trục trặc, Hẹn gặp bạn lần sau nha';
     } else if (message.includes('credit') || message.includes('quota') || message.includes('429') || message.includes('insufficient')) {

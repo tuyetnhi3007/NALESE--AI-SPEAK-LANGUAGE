@@ -75,6 +75,8 @@ export interface VoiceChatRequest {
   speed?: number;
   vocabContext?: VocabEntry[]; // Vocabulary context từ file upload
   apiKey?: string;             // Client-provided API key
+  skipPronunciation?: boolean; // Tối ưu hóa: đánh giá phát âm ở endpoint song song
+  stream?: boolean;            // Tối ưu hóa: stream từng token qua SSE
 }
 
 // Voice chat API response
@@ -83,6 +85,7 @@ export interface VoiceChatResponse {
   userPinyin?: string;         // Pinyin tương ứng với câu người dùng nói (tiếng Trung)
   userRomanization?: string;   // Romaji/Pinyin tương ứng với câu người dùng nói (đa ngôn ngữ)
   pronunciationResult?: PronunciationAssessmentResult; // Kết quả phát âm
+  pronunciationScore?: number | null; // Điểm phát âm tổng thể (0-100)
   assistantOriginal: string;    // Câu gốc từ AI dành riêng cho TTS và hiển thị dòng 1
   assistantRomanization?: string;
   assistantTranslation?: string;

@@ -6,8 +6,9 @@
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { PronunciationAssessorAdapter, AssessPronunciationOptions } from './types';
-import type { PronunciationAssessmentResult, SyllableAssessment } from '@/lib/types';
+import type { PronunciationAssessmentResult, SyllableAssessment, PhonemeAssessment } from '@/lib/types';
 import { getPronunciationConfig } from './config';
+import { aggregateSyllableAssessment } from './mapper';
 
 function detectAudioMimeType(base64: string): string {
   try {
@@ -60,8 +61,8 @@ export class GeminiPronunciationAssessor implements PronunciationAssessorAdapter
       };
     }
 
-    const geminiKeys = [process.env.GEMINI_API_KEY_2, process.env.GEMINI_API_KEY].filter(Boolean) as string[];
-    const geminiModels = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.8-flash'];
+    const geminiKeys = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2].filter(Boolean) as string[];
+    const geminiModels = ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.5-flash'];
     const detectedMimeType = detectAudioMimeType(audioBase64);
 
     // Xây dựng prompt thẩm định ngữ âm chuyên sâu theo từng ngôn ngữ
@@ -72,11 +73,13 @@ Hãy nghe đoạn âm thanh thực tế của người dùng và đối chiếu 
 
 Nhiệm vụ phân tích âm học:
 1. Đối chiếu âm thanh thực tế với từng chữ Hán và âm tiết Pinyin chuẩn (kèm dấu thanh điệu 1-4).
-2. Đánh giá tính chính xác của phụ âm đầu (thanh mẫu), nguyên âm (vận mẫu), và thanh điệu (tones 1-4).
-3. Nếu phát âm đúng, cho điểm từ 75-100 và errorType là "None".
-4. Nếu phát âm sai thanh điệu (ví dụ thanh 3 đọc thành thanh 4), cho điểm dưới 70 và errorType là "ToneError".
-5. Nếu phát âm sai âm tiết hoặc nuốt chữ, cho điểm dưới 60 và errorType là "Mispronunciation" hoặc "Omission".
-6. Tính điểm tổng thể overallScore (0-100) và accuracyScore (0-100).
+2. Đảm bảo mảng "syllables" có đủ từng chữ Hán tương ứng với câu "${referenceText}".
+3. Đánh giá tính chính xác của phụ âm đầu (thanh mẫu), nguyên âm (vận mẫu), và thanh điệu (tones 1-4).
+4. Nếu phát âm đúng, cho điểm từ 75-100 và errorType là "None".
+5. Nếu phát âm sai thanh điệu (ví dụ thanh 3 đọc thành thanh 4), cho điểm dưới 70 và errorType là "ToneError".
+6. Nếu phát âm sai âm tiết hoặc nuốt chữ, cho điểm dưới 60 và errorType là "Mispronunciation" hoặc "Omission".
+7. QUAN TRỌNG: Chỉ những âm tiết người dùng phát âm sai mới cho điểm < 70 hoặc errorType khác "None". Các âm tiết đúng phải giữ errorType là "None" và điểm >= 75.
+8. Tính điểm tổng thể overallScore (0-100) và accuracyScore (0-100).
 
 Định dạng JSON bắt buộc:
 {
@@ -141,6 +144,7 @@ Nhiệm vụ phân tích âm học:
             model: modelName,
             generationConfig: {
               temperature: 0.2,
+              maxOutputTokens: 2048,
               responseMimeType: 'application/json',
             },
           });
@@ -170,7 +174,17 @@ Nhiệm vụ phân tích âm học:
     }
 
     try {
-      const parsed = JSON.parse(responseText);
+      let cleanJson = responseText.trim();
+      if (cleanJson.includes('```')) {
+        cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      }
+      const startIdx = cleanJson.indexOf('{');
+      const endIdx = cleanJson.lastIndexOf('}');
+      if (startIdx !== -1 && endIdx !== -1) {
+        cleanJson = cleanJson.slice(startIdx, endIdx + 1);
+      }
+
+      const parsed = JSON.parse(cleanJson);
       const overallScore = typeof parsed.overallScore === 'number' ? Math.round(parsed.overallScore) : null;
       const syllables: SyllableAssessment[] = [];
 
@@ -180,14 +194,18 @@ Nhiệm vụ phân tích âm học:
           const char = typeof s.character === 'string' ? s.character : '';
           const pinyin = typeof s.pinyin === 'string' ? s.pinyin : '';
           const score = typeof s.accuracyScore === 'number' ? s.accuracyScore : 70;
-          const errorType = s.errorType || (score < 70 ? 'Mispronunciation' : 'None');
+          const rawPhonemes: PhonemeAssessment[] = Array.isArray(s.phonemes)
+            ? s.phonemes.map((ph: any) => ({
+                phoneme: String(ph.phoneme || ''),
+                accuracyScore: typeof ph.accuracyScore === 'number' ? ph.accuracyScore : score,
+                errorType: ph.errorType || (ph.accuracyScore < 70 ? 'Mispronunciation' : 'None'),
+              }))
+            : [];
 
+          // Sử dụng aggregateSyllableAssessment để tổng hợp chuẩn xác các phoneme
+          const aggregated = aggregateSyllableAssessment(char, pinyin, rawPhonemes, score);
           syllables.push({
-            character: char,
-            pinyin,
-            accuracyScore: score,
-            errorType,
-            phonemes: Array.isArray(s.phonemes) ? s.phonemes : [],
+            ...aggregated,
             note: s.note,
           });
         }

@@ -68,11 +68,11 @@ export async function chatWithGroq(
     { role: 'user', content: userMessage }
   ];
 
-  // Danh sách các model hoạt động trên Groq
+  // Danh sách các model hoạt động trên Groq (qwen/qwen3.8-27b siêu nhanh ~210ms)
   const modelsToTry = [
+    'qwen/qwen3.8-27b',
     'openai/gpt-oss-120b',
     'openai/gpt-oss-20b',
-    'qwen/qwen3.8-27b',
   ];
 
   let lastError: any = null;
@@ -82,7 +82,7 @@ export async function chatWithGroq(
       const response = await groq.chat.completions.create({
         messages,
         model,
-        max_tokens: 600,
+        max_tokens: 300,
         temperature: 0.7,
         response_format: { type: 'json_object' },
       });

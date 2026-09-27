@@ -83,6 +83,9 @@ interface ChatResult {
  * Ưu tiên Gemini (miễn phí tier), fallback sang OpenAI GPT-4o.
  */
 export async function chatWithAI(opts: ChatOptions): Promise<ChatResult> {
+  const t0 = Date.now();
+  console.log('[PERF] llm_start', t0);
+
   const systemPrompt = buildSystemPrompt({
     language: opts.language,
     level: opts.level,
@@ -91,16 +94,19 @@ export async function chatWithAI(opts: ChatOptions): Promise<ChatResult> {
   });
 
   const errors: string[] = [];
+  const safeHistory = (opts.history || []).slice(-8);
 
-  // Option 1: Gemini 2.0 Flash (ưu tiên — miễn phí, không cần clientApiKey)
+  // Option 1: Gemini 3.5 Flash Lite (ưu tiên — miễn phí, siêu nhanh ~800ms)
   if (process.env.GEMINI_API_KEY) {
     try {
       const { chatWithGemini } = await import('./gemini');
       const text = await chatWithGemini(
         systemPrompt,
-        opts.history.slice(-8),
-        opts.userMessage
+        safeHistory,
+        opts.userMessage,
+        opts.clientApiKey
       );
+      console.log('[PERF] llm_end', Date.now(), `duration: ${Date.now() - t0}ms`);
       return { text, provider: 'gemini' };
     } catch (err: any) {
       console.warn('[LLM] Gemini failed:', err);
@@ -108,15 +114,17 @@ export async function chatWithAI(opts: ChatOptions): Promise<ChatResult> {
     }
   }
 
-  // Option 2: Groq Llama 3 (fallback 1 — siêu nhanh, miễn phí tier)
+  // Option 2: Groq (fallback 1 — qwen3.8-27b siêu nhanh ~210ms)
   if (process.env.GROQ_API_KEY) {
     try {
       const { chatWithGroq } = await import('./groq');
       const text = await chatWithGroq(
         systemPrompt,
-        opts.history.slice(-8),
-        opts.userMessage
+        safeHistory,
+        opts.userMessage,
+        opts.clientApiKey
       );
+      console.log('[PERF] llm_end', Date.now(), `duration: ${Date.now() - t0}ms`);
       return { text, provider: 'groq' };
     } catch (err: any) {
       console.warn('[LLM] Groq failed:', err);
@@ -124,16 +132,17 @@ export async function chatWithAI(opts: ChatOptions): Promise<ChatResult> {
     }
   }
 
-  // Option 3: OpenRouter (fallback 2 — dùng để xoay vòng model nếu bị lỗi)
+  // Option 3: OpenRouter (fallback 2)
   if (process.env.OPENROUTER_API_KEY) {
     try {
       const { chatWithOpenRouter } = await import('./openrouter');
       const result = await chatWithOpenRouter(
         systemPrompt,
-        opts.history.slice(-8),
+        safeHistory,
         opts.userMessage,
         undefined
       );
+      console.log('[PERF] llm_end', Date.now(), `duration: ${Date.now() - t0}ms`);
       return { text: result.text, provider: 'openrouter', toolResults: result.toolResults };
     } catch (err: any) {
       console.warn('[LLM] OpenRouter failed:', err);
@@ -141,11 +150,57 @@ export async function chatWithAI(opts: ChatOptions): Promise<ChatResult> {
     }
   }
 
-  // Đã xóa Option 4: OpenAI
-
   throw new Error(
     `Tất cả LLM đều lỗi! ${errors.join(' | ')}`
   );
+}
+
+/**
+ * Stream LLM response chunk by chunk for lowest first-token latency.
+ */
+export async function* chatWithAIStream(
+  opts: ChatOptions
+): AsyncGenerator<{ chunk: string; provider: string }, void, unknown> {
+  const t0 = Date.now();
+  console.log('[PERF] llm_start', t0);
+
+  const safeHistory = (opts.history || []).slice(-8);
+  const systemPrompt = buildSystemPrompt({
+    language: opts.language,
+    level: opts.level,
+    topic: opts.topic,
+    vocabContext: opts.vocabContext,
+  });
+
+  // Ưu tiên Gemini Stream
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      const { chatWithGeminiStream } = await import('./gemini');
+      let first = true;
+      for await (const chunk of chatWithGeminiStream(
+        systemPrompt,
+        safeHistory,
+        opts.userMessage,
+        opts.clientApiKey
+      )) {
+        if (first) {
+          console.log('[PERF] llm_first_token', Date.now(), `ttft: ${Date.now() - t0}ms`);
+          first = false;
+        }
+        yield { chunk, provider: 'gemini' };
+      }
+      console.log('[PERF] llm_end', Date.now(), `duration: ${Date.now() - t0}ms`);
+      return;
+    } catch (err: any) {
+      console.warn('[LLMStream] Gemini stream failed, falling back:', err);
+    }
+  }
+
+  // Fallback sang regular non-streaming nếu stream gặp lỗi
+  const fallback = await chatWithAI(opts);
+  console.log('[PERF] llm_first_token', Date.now(), `ttft: ${Date.now() - t0}ms`);
+  yield { chunk: fallback.text, provider: fallback.provider };
+  console.log('[PERF] llm_end', Date.now(), `duration: ${Date.now() - t0}ms`);
 }
 
 // ─── TTS: Browser SpeechSynthesis (Client-side duy nhất) ──────

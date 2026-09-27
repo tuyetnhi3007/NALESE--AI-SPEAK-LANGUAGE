@@ -23,11 +23,18 @@ const geminiAssessor = new GeminiPronunciationAssessor();
 export async function assessPronunciation(
   options: AssessPronunciationOptions
 ): Promise<PronunciationAssessmentResult> {
-  const { referenceText, language } = options;
+  const { referenceText, language, audioBase64 } = options;
   const config = getPronunciationConfig(language);
+
+  console.log('[PRON DEBUG] assessment started');
+  console.log('[PRON DEBUG] audio available:', Boolean(audioBase64), audioBase64 ? `${audioBase64.length} chars` : '0 chars');
+  console.log('[PRON DEBUG] reference text:', referenceText);
 
   // Kiểm tra văn bản mục tiêu và ngôn ngữ hợp lệ
   if (!referenceText?.trim() || !config || !config.enabled) {
+    console.log('[PRON DEBUG] provider: unassessed (invalid text or disabled config)');
+    console.log('[PRON DEBUG] overall score: null');
+    console.log('[PRON DEBUG] syllable results: []');
     return {
       provider: 'unassessed',
       referenceText: referenceText || '',
@@ -39,9 +46,13 @@ export async function assessPronunciation(
   // 1. Kiểm tra và gọi Azure (Primary Dedicated Engine)
   if (azureAssessor.isConfigured()) {
     try {
+      console.log('[PRON DEBUG] provider: azure (attempting)');
       const result = await azureAssessor.assess(options);
       if (typeof result.overallScore === 'number') {
-        console.log(`[Pronunciation]\nlanguage: ${config.locale}\nprovider: azure\noverallScore: ${result.overallScore}`);
+        console.log('[PRON DEBUG] provider: azure');
+        console.log('[PRON DEBUG] raw assessment:', JSON.stringify(result));
+        console.log('[PRON DEBUG] overall score:', result.overallScore);
+        console.log('[PRON DEBUG] syllable results:', JSON.stringify(result.syllables));
         return result;
       }
     } catch (err) {
@@ -52,9 +63,13 @@ export async function assessPronunciation(
   // 2. Chuyển sang Gemini Fallback (Audio-based Evaluator)
   if (geminiAssessor.isConfigured()) {
     try {
+      console.log('[PRON DEBUG] provider: gemini (attempting)');
       const result = await geminiAssessor.assess(options);
       if (typeof result.overallScore === 'number') {
-        console.log(`[Pronunciation]\nlanguage: ${config.locale}\nprovider: gemini\noverallScore: ${result.overallScore}`);
+        console.log('[PRON DEBUG] provider: gemini');
+        console.log('[PRON DEBUG] raw assessment:', JSON.stringify(result));
+        console.log('[PRON DEBUG] overall score:', result.overallScore);
+        console.log('[PRON DEBUG] syllable results:', JSON.stringify(result.syllables));
         return result;
       }
     } catch (err) {
@@ -63,7 +78,9 @@ export async function assessPronunciation(
   }
 
   // 3. Dự phòng an toàn tuyệt đối khi không có provider nào đánh giá thành công
-  console.log(`[Pronunciation]\nlanguage: ${config.locale}\nprovider: unassessed\noverallScore: null`);
+  console.log('[PRON DEBUG] provider: unassessed');
+  console.log('[PRON DEBUG] overall score: null');
+  console.log('[PRON DEBUG] syllable results: []');
   return {
     provider: 'unassessed',
     referenceText,
