@@ -13,6 +13,8 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Mic, MicOff, Volume2, RotateCcw, Sparkles, Square } from 'lucide-react';
+import AICharacterPanel from './AICharacterPanel';
+import ChatHistoryStack from './ChatHistoryStack';
 import { useSettings } from './SettingsContext';
 import { generateId, blobToBase64, getBestAudioMimeType } from '@/lib/audio-utils';
 import type { SupportedLanguage, ConversationMessage, VoiceChatRequest, VoiceChatResponse, SyllableAssessment } from '@/lib/types';
@@ -23,6 +25,7 @@ type TutorState = 'idle' | 'listening' | 'waiting' | 'thinking' | 'speaking';
 interface VoiceTutorProps {
   language: SupportedLanguage;
   topic?: string;
+  onLanguageChange?: (lang: SupportedLanguage) => void;
 }
 
 // ─── Hằng số ────────────────────────────────────────────────
@@ -140,7 +143,7 @@ function sanitizeMessage(m: any): ConversationMessage {
   };
 }
 
-export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
+export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceTutorProps) {
   const { settings } = useSettings();
 
   // ─── State ────────────────────────────────────────────────
@@ -151,6 +154,7 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
   const [finalTranscript, setFinalTranscript] = useState('');
   const [silenceCountdown, setSilenceCountdown] = useState<number | null>(null);
   const [isSpeechSupported, setIsSpeechSupported] = useState(true);
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
 
   // ─── Refs (truy cập được từ mọi closure mà không stale) ──
   const sessionActiveRef = useRef(false);
@@ -169,9 +173,6 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
   const prevLanguageRef = useRef(language);
   const topicRef = useRef(topic);
   const conversationEndRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animFrameRef = useRef(0);
-  const timeRef = useRef(0);
   const startListeningRef = useRef<() => void>(() => {});
 
   // Đồng bộ refs với props/state
@@ -225,33 +226,6 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
   useEffect(() => {
     conversationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [conversation]);
-
-  // ─── Canvas: sóng đơn giản ────────────────────────────────
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const animate = (t: number) => {
-      timeRef.current = t / 1000;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const isActive = tutorState !== 'idle';
-        ctx.strokeStyle = isActive ? 'rgba(139,92,246,0.7)' : 'rgba(139,92,246,0.2)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        for (let x = 0; x < canvas.width; x++) {
-          const freq = isActive ? (tutorState === 'speaking' ? 3 : 1.5) : 0.5;
-          const amp = isActive ? (tutorState === 'thinking' ? 8 : 14) : 4;
-          const y = canvas.height / 2 + Math.sin((x / canvas.width) * Math.PI * freq * 4 + timeRef.current * (isActive ? 4 : 1)) * amp;
-          x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-      }
-      animFrameRef.current = requestAnimationFrame(animate);
-    };
-    animFrameRef.current = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animFrameRef.current);
-  }, [tutorState]);
 
   // ─── Browser SpeechSynthesis (TTS duy nhất của ứng dụng) ───
   const speakWithBrowser = useCallback((text: string, onEnd: () => void) => {
@@ -328,6 +302,7 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
 
       if (!mediaStreamRef.current || !mediaStreamRef.current.active) {
         mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setMediaStream(mediaStreamRef.current);
       }
       if (window.MediaRecorder && mediaStreamRef.current) {
         audioChunksRef.current = [];
@@ -873,6 +848,7 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
     try {
       if (!mediaStreamRef.current || !mediaStreamRef.current.active) {
         mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setMediaStream(mediaStreamRef.current);
       }
     } catch (e) {
       console.warn('getUserMedia error on session start:', e);
@@ -899,6 +875,7 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
         mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       } catch {}
       mediaStreamRef.current = null;
+      setMediaStream(null);
     }
     audioChunksRef.current = [];
 
@@ -925,7 +902,6 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
         } catch {}
       }
       stopAudio();
-      cancelAnimationFrame(animFrameRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -970,247 +946,26 @@ export default function VoiceTutor({ language, topic }: VoiceTutorProps) {
   }, [tutorState, startSession, stopAudio, stopSession, triggerSend]);
 
   // ─── Render ───────────────────────────────────────────────
-  const isActive = tutorState !== 'idle';
-  const badgeState = tutorState === 'waiting' ? 'listening' : tutorState;
-
-  const getMicIcon = () => {
-    if (tutorState === 'thinking') {
-      return (
-        <span className="flex gap-1">
-          {[0, 0.15, 0.3].map((d) => (
-            <span key={d} className="block w-1.5 h-1.5 rounded-full bg-yellow-400 animate-bounce"
-              style={{ animationDelay: `${d}s` }} />
-          ))}
-        </span>
-      );
-    }
-    if (tutorState === 'speaking') return <Volume2 size={32} className="text-emerald-400" />;
-    if (tutorState === 'listening' || tutorState === 'waiting') return <Square size={28} className="text-red-400" fill="currentColor" />;
-    return <Mic size={32} className="text-purple-400" />;
-  };
-
   return (
-    <div className="flex flex-col h-full gap-4">
-      {/* Visualizer + Mic */}
-      <div className="glass-card p-6 flex flex-col items-center gap-4">
-        <canvas ref={canvasRef} width={400} height={50} className="w-full rounded-lg" style={{ maxHeight: 50 }} />
+    <>
+      {/* Khu vực nhân vật AI + nút ghi âm */}
+      <AICharacterPanel
+        tutorState={tutorState}
+        isSpeechSupported={isSpeechSupported}
+        silenceCountdown={silenceCountdown}
+        finalTranscript={finalTranscript}
+        interimTranscript={interimTranscript}
+        error={error}
+        onMainButtonClick={handleMainButton}
+        mediaStream={mediaStream}
+      />
 
-        {/* Mic orb */}
-        <div className="relative flex items-center justify-center">
-          {(tutorState === 'listening' || tutorState === 'waiting') && (
-            <>
-              <div className="mic-ring-1" />
-              <div className="mic-ring-2" />
-              <div className="mic-ring-3" />
-            </>
-          )}
-          <button id="mic-button"
-            className={`mic-orb ${badgeState} w-24 h-24 flex items-center justify-center select-none`}
-            onClick={handleMainButton}
-            aria-label={isActive ? 'Dừng' : 'Bắt đầu nói'}>
-            {getMicIcon()}
-          </button>
-        </div>
-
-        {/* Status */}
-        <div className="flex flex-col items-center gap-2 w-full">
-          <div className={`status-badge ${badgeState}`}>{STATE_LABELS[tutorState]}</div>
-
-          {/* Countdown */}
-          {tutorState === 'waiting' && silenceCountdown !== null && (
-            <div className="flex items-center gap-2 text-sm" style={{ color: '#fde68a' }}>
-              <span>Gửi sau</span>
-              <span className="font-bold tabular-nums">{silenceCountdown}s</span>
-              <span>im lặng</span>
-            </div>
-          )}
-
-          {tutorState === 'idle' && (
-            <p className="text-xs text-indigo-900/35 text-center max-w-xs">
-              Nhấn 🎤 để bắt đầu. Hệ thống tự nhận diện sau <strong>3 giây</strong> im lặng.
-            </p>
-          )}
-        </div>
-
-        {/* Realtime transcript */}
-        {(tutorState === 'listening' || tutorState === 'waiting') && (
-          <div className="w-full rounded-xl p-4 min-h-[60px]"
-            style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.2)' }}>
-            <div className="text-xs text-purple-400/70 uppercase tracking-wider mb-1.5">
-              📝 Đang nhận diện...
-            </div>
-            <p className="text-sm leading-relaxed">
-              {finalTranscript && <span className="text-indigo-900">{finalTranscript}</span>}
-              {interimTranscript && <span className="text-indigo-900/45 italic"> {interimTranscript}</span>}
-              {!finalTranscript && !interimTranscript && (
-                <span className="text-indigo-900/25 italic">Hãy nói gì đó...</span>
-              )}
-            </p>
-          </div>
-        )}
-
-        {/* Error */}
-        {error && (
-          <div className="w-full text-sm text-center py-2 px-4 rounded-xl"
-            style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#fca5a5' }}>
-            ⚠️ {error}
-          </div>
-        )}
-
-        {/* Browser không hỗ trợ */}
-        {!isSpeechSupported && (
-          <div className="w-full p-3 rounded-xl text-sm text-center"
-            style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', color: '#fde68a' }}>
-            <MicOff size={16} className="mx-auto mb-1" />
-            Dùng <strong>Chrome</strong> hoặc <strong>Edge</strong> để có Web Speech API.
-          </div>
-        )}
-      </div>
-
-      {/* Hội thoại */}
-      <div className="glass-card flex-1 flex flex-col" style={{ minHeight: 280 }}>
-        <div className="flex items-center justify-between px-4 py-3"
-          style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <h3 className="text-sm font-semibold text-indigo-900/70 flex items-center gap-2">
-            <Sparkles size={14} className="text-purple-400" /> Lịch sử hội thoại
-            {conversation.length > 0 && (
-              <span className="text-xs font-normal text-indigo-900/25">({conversation.length})</span>
-            )}
-          </h3>
-          {conversation.length > 0 && (
-            <button onClick={clearConversation}
-              className="flex items-center gap-1 text-xs text-indigo-900/30 hover:text-indigo-900/60 transition-colors">
-              <RotateCcw size={12} /> Xóa
-            </button>
-          )}
-        </div>
-
-        <div className="conversation-area flex-1 overflow-y-auto" style={{ maxHeight: 380 }}>
-          {conversation.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-10">
-              <div className="text-4xl">🤖</div>
-              <p className="text-indigo-900/35 text-sm max-w-xs">
-                Nhấn nút micro và bắt đầu nói.<br />
-                AI sẽ trả lời sau 3 giây im lặng.
-              </p>
-            </div>
-          ) : (
-            <>
-              {conversation.map((msg) => {
-                const originalText = cleanOriginalString(msg.original || msg.text || '');
-
-                if (msg.role === 'user') {
-                  return (
-                    <div key={msg.id} className="self-end flex items-center gap-2.5 max-w-[88%]">
-                      {/* Điểm phát âm hiển thị bên TRÁI bubble của USER */}
-                      {typeof msg.pronunciationScore === 'number' && (
-                        <div
-                          className={`flex-shrink-0 px-2.5 py-1 rounded-full text-xs font-bold border shadow-sm ${getScoreBadgeStyle(
-                            msg.pronunciationScore
-                          )}`}
-                          title={`Điểm phát âm: ${Math.round(msg.pronunciationScore)}%`}
-                        >
-                          {Math.round(msg.pronunciationScore)}%
-                        </div>
-                      )}
-
-                      {/* Bubble tin nhắn của USER */}
-                      <div className="message-bubble user rounded-2xl p-3 flex-1 min-w-0">
-                        <div className="flex items-start gap-2">
-                          <span className="text-base mt-0.5 flex-shrink-0">👤</span>
-                          <div className="flex-1 min-w-0">
-                            {/* Dòng 1: Câu tiếng Trung */}
-                            <p className="text-sm leading-relaxed font-semibold">{originalText}</p>
-
-                            {/* Dòng 2: Pinyin (chỉ bôi đỏ âm tiết phát âm sai) */}
-                            {msg.pronunciationResult?.syllables && msg.pronunciationResult.syllables.length > 0 ? (
-                              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1.5">
-                                {msg.pronunciationResult.syllables.map((s, idx) => {
-                                  const isError =
-                                    s.errorType !== 'None' ||
-                                    (typeof s.accuracyScore === 'number' && s.accuracyScore < 70);
-                                  return (
-                                    <span
-                                      key={idx}
-                                      className={`text-xs font-mono tracking-wide transition-colors ${
-                                        isError
-                                          ? 'text-red-300 font-bold bg-red-950/60 px-1 py-0.5 rounded border border-red-500/40 shadow-sm'
-                                          : 'text-white/80'
-                                      }`}
-                                      title={
-                                        s.accuracyScore !== null
-                                          ? `${s.character || ''} (${s.pinyin}): ${s.accuracyScore} điểm${
-                                              s.errorType !== 'None' ? ` - ${s.errorType}` : ''
-                                            }`
-                                          : `${s.character || ''} (${s.pinyin})`
-                                      }
-                                    >
-                                      {s.pinyin}
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                            ) : msg.romanization ? (
-                              <p className="text-xs text-white/80 leading-relaxed mt-1 font-mono">
-                                {msg.romanization}
-                              </p>
-                            ) : null}
-
-                            <div className="flex items-center gap-2 mt-2">
-                              <span className="text-xs text-white/50">
-                                {new Date(msg.timestamp).toLocaleTimeString('vi-VN')}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div key={msg.id}
-                    className="message-bubble assistant rounded-2xl p-3">
-                    <div className="flex items-start gap-2">
-                      <span className="text-base mt-0.5 flex-shrink-0">🤖</span>
-                      <div className="flex-1 min-w-0">
-                        {/* Dòng 1: ORIGINAL AI RESPONSE (Nguồn duy nhất cho TTS) */}
-                        <p className="text-sm text-indigo-900/90 leading-relaxed font-semibold">
-                          {originalText}
-                        </p>
-                        {/* Dòng 2: ROMANIZATION (Chỉ dùng hiển thị UI) */}
-                        {msg.romanization && (
-                          <p className="text-sm text-indigo-900/60 leading-relaxed mt-1">
-                            {msg.romanization}
-                          </p>
-                        )}
-                        {/* Dòng 3: TRANSLATION (Chỉ dùng hiển thị UI) */}
-                        {msg.translation && (
-                          <p className="text-sm text-indigo-900/75 leading-relaxed mt-1 italic">
-                            {msg.translation}
-                          </p>
-                        )}
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className="text-xs text-indigo-900/30">
-                            {new Date(msg.timestamp).toLocaleTimeString('vi-VN')}
-                          </span>
-                          <button
-                            onClick={() => replayAudio(msg)}
-                            className="text-xs text-purple-600 hover:text-purple-800 transition-colors flex items-center gap-1 font-medium"
-                          >
-                            <Volume2 size={12} /> Phát lại
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              <div ref={conversationEndRef} />
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+      {/* Lịch sử hội thoại — đặt ở sidebar bởi page.tsx */}
+      <ChatHistoryStack
+        conversation={conversation}
+        onClearConversation={clearConversation}
+        onReplayAudio={replayAudio}
+      />
+    </>
   );
 }
