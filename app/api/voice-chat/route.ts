@@ -20,7 +20,13 @@ import { ensureRomaji } from '@/lib/japanese';
 
 export const maxDuration = 60;
 
-export function parseAIResponse(raw: string): { original: string; romanization: string; translation: string; userRomanization?: string } {
+export function parseAIResponse(raw: string): {
+  original: string;
+  romanization: string;
+  translation: string;
+  userRomanization?: string;
+  userTranslation?: string;
+} {
   if (!raw) return { original: '', romanization: '', translation: '' };
   
   let cleaned = raw.trim();
@@ -34,30 +40,56 @@ export function parseAIResponse(raw: string): { original: string; romanization: 
     try {
       const parsed = JSON.parse(jsonCandidate);
       if (parsed && typeof parsed === 'object') {
-        const original = typeof parsed.original === 'string' ? parsed.original.trim() : (typeof parsed.originalText === 'string' ? parsed.originalText.trim() : '');
-        const romanization = typeof parsed.romanization === 'string' ? parsed.romanization.trim() : (typeof parsed.romaji === 'string' ? parsed.romaji.trim() : '');
-        const translation = typeof parsed.translation === 'string' ? parsed.translation.trim() : '';
-        const userRomanization = typeof parsed.userRomanization === 'string' ? parsed.userRomanization.trim() : undefined;
+        const original = typeof parsed.original === 'string'
+          ? parsed.original.trim()
+          : (typeof parsed.originalText === 'string'
+            ? parsed.originalText.trim()
+            : (typeof parsed.chinese === 'string'
+              ? parsed.chinese.trim()
+              : (typeof parsed.text === 'string' ? parsed.text.trim() : '')));
+
+        const romanization = typeof parsed.romanization === 'string'
+          ? parsed.romanization.trim()
+          : (typeof parsed.pinyin === 'string'
+            ? parsed.pinyin.trim()
+            : (typeof parsed.romaji === 'string' ? parsed.romaji.trim() : ''));
+
+        const translation = typeof parsed.translation === 'string'
+          ? parsed.translation.trim()
+          : (typeof parsed.vietnamese === 'string'
+            ? parsed.vietnamese.trim()
+            : (typeof parsed.meaning === 'string' ? parsed.meaning.trim() : ''));
+
+        const userRomanization = typeof parsed.userRomanization === 'string'
+          ? parsed.userRomanization.trim()
+          : (typeof parsed.userPinyin === 'string' ? parsed.userPinyin.trim() : undefined);
+
+        const userTranslation = typeof parsed.userTranslation === 'string'
+          ? parsed.userTranslation.trim()
+          : (typeof parsed.userVietnamese === 'string' ? parsed.userVietnamese.trim() : undefined);
+
         if (original) {
-          return { original, romanization, translation, userRomanization };
+          return { original, romanization, translation, userRomanization, userTranslation };
         }
       }
     } catch {}
   }
 
   // 2. Trích xuất qua Regex (hỗ trợ cả khi JSON bị cắt cụt, thiếu dấu ngoặc kép hoặc ngoặc nhọn })
-  const origMatch = cleaned.match(/"(?:original|originalText)"\s*:\s*"((?:[^"\\]|\\.)*)"?/i) || cleaned.match(/"(?:original|originalText)"\s*:\s*"([^"]*)/i);
-  const romMatch = cleaned.match(/"(?:romanization|romaji)"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
-  const transMatch = cleaned.match(/"translation"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
-  const userRomMatch = cleaned.match(/"userRomanization"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
+  const origMatch = cleaned.match(/"(?:original|originalText|chinese)"\s*:\s*"((?:[^"\\]|\\.)*)"?/i) || cleaned.match(/"(?:original|originalText|chinese)"\s*:\s*"([^"]*)/i);
+  const romMatch = cleaned.match(/"(?:romanization|pinyin|romaji)"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
+  const transMatch = cleaned.match(/"(?:translation|vietnamese)"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
+  const userRomMatch = cleaned.match(/"(?:userRomanization|userPinyin)"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
+  const userTransMatch = cleaned.match(/"(?:userTranslation|userVietnamese)"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
 
   if (origMatch && origMatch[1]) {
     const original = origMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim();
     const romanization = romMatch && romMatch[1] ? romMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : '';
     const translation = transMatch && transMatch[1] ? transMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : '';
     const userRomanization = userRomMatch && userRomMatch[1] ? userRomMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : undefined;
+    const userTranslation = userTransMatch && userTransMatch[1] ? userTransMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : undefined;
     if (original) {
-      return { original, romanization, translation, userRomanization };
+      return { original, romanization, translation, userRomanization, userTranslation };
     }
   }
 
@@ -202,12 +234,17 @@ export async function POST(request: NextRequest): Promise<Response> {
             const assistantOriginal = parsed.original;
             const assistantRomanization = isJapanese
               ? ensureRomaji(parsed.romanization, assistantOriginal)
-              : (isChinese ? parsed.romanization : '');
+              : (isChinese ? (parsed.romanization || '') : '');
             const assistantTranslation = parsed.translation;
+            const userTranslation = parsed.userTranslation || '';
+
+            if (!userPinyin && isChinese) {
+              userPinyin = parsed.userRomanization || '';
+            }
 
             let userRomanization: string | undefined = undefined;
             if (isChinese) {
-              userRomanization = userPinyin || parsed.userRomanization;
+              userRomanization = userPinyin || parsed.userRomanization || '';
             } else if (isJapanese) {
               userRomanization = parsed.userRomanization
                 ? ensureRomaji(parsed.userRomanization)
@@ -224,10 +261,12 @@ export async function POST(request: NextRequest): Promise<Response> {
                   userTranscript,
                   userPinyin,
                   userRomanization,
+                  userTranslation,
                   pronunciationResult,
                   pronunciationScore: pronunciationResult?.overallScore ?? null,
                   assistantOriginal,
                   assistantRomanization,
+                  assistantPinyin: assistantRomanization,
                   assistantTranslation,
                   assistantText: assistantOriginal,
                   latencyMs,
@@ -287,13 +326,18 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     const assistantRomanization = isJapanese
       ? ensureRomaji(parsed.romanization, assistantOriginal)
-      : (isChinese ? parsed.romanization : '');
+      : (isChinese ? (parsed.romanization || '') : '');
 
     const assistantTranslation = parsed.translation;
+    const userTranslation = parsed.userTranslation || '';
+
+    if (!userPinyin && isChinese) {
+      userPinyin = parsed.userRomanization || '';
+    }
 
     let userRomanization: string | undefined = undefined;
     if (isChinese) {
-      userRomanization = userPinyin || parsed.userRomanization;
+      userRomanization = userPinyin || parsed.userRomanization || '';
     } else if (isJapanese) {
       userRomanization = parsed.userRomanization
         ? ensureRomaji(parsed.userRomanization)
@@ -308,6 +352,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       userTranscript,
       userPinyin,
       userRomanization,
+      userTranslation,
       pronunciationResult,
       pronunciationScore: pronunciationResult?.overallScore ?? null,
       assistantOriginal,

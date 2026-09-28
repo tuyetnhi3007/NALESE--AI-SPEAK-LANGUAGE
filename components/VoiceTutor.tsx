@@ -105,16 +105,23 @@ function getScoreBadgeStyle(score: number): string {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function sanitizeMessage(m: any): ConversationMessage {
   const rawOriginal = String(m.original || m.text || '');
-  let romanization = m.romanization || '';
+  let romanization = m.romanization || m.pinyin || '';
+  let pinyin = m.pinyin || m.romanization || '';
   let translation = m.translation || '';
   let audioBase64 = m.audioBase64;
   const pronunciationResult = m.pronunciationResult;
-  const pronunciationScore = typeof m.pronunciationScore === 'number' ? m.pronunciationScore : (pronunciationResult?.overallScore ?? null);
+  const pronunciationScore = typeof m.pronunciationScore === 'number'
+    ? m.pronunciationScore
+    : (pronunciationResult?.overallScore ?? null);
 
-  // Trích xuất romanization và translation nếu chuỗi chứa JSON
-  if (rawOriginal.includes('"romanization"')) {
-    const romMatch = rawOriginal.match(/"romanization"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
-    if (romMatch && romMatch[1]) romanization = romMatch[1].replace(/\\"/g, '"').trim();
+  // Trích xuất romanization, pinyin và translation nếu chuỗi chứa JSON
+  if (rawOriginal.includes('"romanization"') || rawOriginal.includes('"pinyin"')) {
+    const romMatch = rawOriginal.match(/"(?:romanization|pinyin)"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
+    if (romMatch && romMatch[1]) {
+      const extracted = romMatch[1].replace(/\\"/g, '"').trim();
+      romanization = extracted;
+      pinyin = extracted;
+    }
   }
   if (rawOriginal.includes('"translation"')) {
     const transMatch = rawOriginal.match(/"translation"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
@@ -133,6 +140,7 @@ function sanitizeMessage(m: any): ConversationMessage {
     role: m.role || 'assistant',
     original,
     romanization,
+    pinyin,
     translation,
     text: original,
     audioBase64,
@@ -489,9 +497,11 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
                     id: currentUserMsgId!,
                     role: 'user',
                     original: evt.userTranscript,
-                    romanization: '',
-                    pronunciationScore: null,
                     text: evt.userTranscript,
+                    pinyin: '',
+                    romanization: '',
+                    translation: '',
+                    pronunciationScore: null,
                     timestamp: Date.now(),
                   },
                 ]);
@@ -514,9 +524,10 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
                       id: assistantMsgId,
                       role: 'assistant',
                       original: currentOriginal,
-                      romanization: '',
-                      translation: '',
                       text: currentOriginal,
+                      romanization: '',
+                      pinyin: '',
+                      translation: '',
                       timestamp: Date.now(),
                     },
                   ]);
@@ -533,17 +544,22 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
               } else if (evt.type === 'done') {
                 console.log('[PERF] response_render', Date.now(), `total: ${Date.now() - startTime}ms`);
                 assistantOriginal = cleanOriginalString(evt.assistantOriginal || assistantOriginal);
-                assistantRomanization = evt.assistantRomanization || '';
+                assistantRomanization = evt.assistantRomanization || evt.assistantPinyin || '';
                 assistantTranslation = evt.assistantTranslation || '';
 
-                // Cập nhật điểm phát âm & Pinyin cho user message
+                const userPinyin = evt.userPinyin || evt.userRomanization || '';
+                const userTranslation = evt.userTranslation || '';
+
+                // Cập nhật điểm phát âm, Pinyin & Bản dịch cho user message
                 if (currentUserMsgId) {
                   setConversation((prev) =>
                     prev.map((m) =>
                       m.id === currentUserMsgId
                         ? {
                             ...m,
-                            romanization: evt.userRomanization || evt.userPinyin || m.romanization,
+                            pinyin: userPinyin || m.pinyin || m.romanization || '',
+                            romanization: userPinyin || m.romanization || m.pinyin || '',
+                            translation: userTranslation || m.translation || '',
                             pronunciationResult: evt.pronunciationResult || m.pronunciationResult,
                             pronunciationScore: typeof evt.pronunciationScore === 'number'
                               ? evt.pronunciationScore
@@ -562,9 +578,10 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
                       id: assistantMsgId,
                       role: 'assistant',
                       original: assistantOriginal,
-                      romanization: assistantRomanization,
-                      translation: assistantTranslation,
                       text: assistantOriginal,
+                      romanization: assistantRomanization,
+                      pinyin: assistantRomanization,
+                      translation: assistantTranslation,
                       timestamp: Date.now(),
                     },
                   ]);
@@ -575,9 +592,10 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
                         ? {
                             ...m,
                             original: assistantOriginal,
-                            romanization: assistantRomanization,
-                            translation: assistantTranslation,
                             text: assistantOriginal,
+                            romanization: assistantRomanization,
+                            pinyin: assistantRomanization,
+                            translation: assistantTranslation,
                           }
                         : m
                     )
@@ -614,13 +632,18 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
           return;
         }
 
+        const userPinyin = data.userPinyin || data.userRomanization || '';
+        const userTranslation = data.userTranslation || '';
+
         if (existingUserMsgId) {
           setConversation((prev) =>
             prev.map((m) =>
               m.id === existingUserMsgId
                 ? {
                     ...m,
-                    romanization: data.userRomanization || data.userPinyin || m.romanization,
+                    pinyin: userPinyin || m.pinyin || m.romanization || '',
+                    romanization: userPinyin || m.romanization || m.pinyin || '',
+                    translation: userTranslation || m.translation || '',
                     pronunciationResult: data.pronunciationResult || m.pronunciationResult,
                     pronunciationScore: typeof data.pronunciationScore === 'number'
                       ? data.pronunciationScore
@@ -636,10 +659,14 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
               id: generateId(),
               role: 'user',
               original: data.userTranscript,
-              romanization: data.userRomanization || data.userPinyin || '',
-              pronunciationResult: data.pronunciationResult,
-              pronunciationScore: data.pronunciationResult?.overallScore ?? null,
               text: data.userTranscript,
+              pinyin: userPinyin,
+              romanization: userPinyin,
+              translation: userTranslation,
+              pronunciationResult: data.pronunciationResult,
+              pronunciationScore: typeof data.pronunciationScore === 'number'
+                ? data.pronunciationScore
+                : (data.pronunciationResult?.overallScore ?? null),
               timestamp: Date.now(),
             },
           ]);
@@ -647,15 +674,17 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
 
         const assistantOriginal = cleanOriginalString(data.assistantOriginal || data.assistantText || '');
         if (assistantOriginal) {
+          const assistantPinyin = data.assistantRomanization || '';
           setConversation((prev) => [
             ...prev,
             {
               id: generateId(),
               role: 'assistant',
               original: assistantOriginal,
-              romanization: data.assistantRomanization || '',
-              translation: data.assistantTranslation || '',
               text: assistantOriginal,
+              romanization: assistantPinyin,
+              pinyin: assistantPinyin,
+              translation: data.assistantTranslation || '',
               audioBase64: data.audioBase64 || undefined,
               timestamp: Date.now(),
               toolResults: data.toolResults,
@@ -706,9 +735,11 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
           id: userMsgId,
           role: 'user',
           original: text,
-          romanization: '',
-          pronunciationScore: null,
           text,
+          pinyin: '',
+          romanization: '',
+          translation: '',
+          pronunciationScore: null,
           timestamp: Date.now(),
         },
       ]);

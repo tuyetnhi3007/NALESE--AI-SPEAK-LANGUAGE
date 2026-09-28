@@ -35,7 +35,9 @@ const LANGUAGE_INSTRUCTIONS: Record<SupportedLanguage, string> = {
 {
   "original": "Câu trả lời bằng tiếng Anh (1-3 câu)",
   "romanization": "Phiên âm IPA (/.../)",
-  "translation": "Dịch nghĩa tiếng Việt"
+  "translation": "Dịch nghĩa tiếng Việt của câu trả lời AI",
+  "userRomanization": "Phiên âm IPA của câu người dùng",
+  "userTranslation": "Dịch nghĩa tiếng Việt của câu người dùng vừa nói"
 }`,
 
   zh: `TARGET: MANDARIN CHINESE (普通话)
@@ -43,8 +45,9 @@ const LANGUAGE_INSTRUCTIONS: Record<SupportedLanguage, string> = {
 {
   "original": "Câu trả lời bằng chữ Hán giản thể (1-3 câu)",
   "romanization": "Pinyin có dấu thanh điệu (ví dụ: Nǐ hǎo)",
-  "translation": "Dịch nghĩa tiếng Việt",
-  "userRomanization": "Pinyin có dấu thanh điệu của câu người dùng vừa nói (ví dụ: Nǐ hǎo)"
+  "translation": "Dịch nghĩa tiếng Việt của câu trả lời AI",
+  "userRomanization": "Pinyin có dấu thanh điệu của câu người dùng vừa nói (ví dụ: Nǐ hǎo)",
+  "userTranslation": "Dịch nghĩa tiếng Việt của câu người dùng vừa nói"
 }`,
 
   ja: `TARGET: JAPANESE (日本語)
@@ -52,8 +55,9 @@ const LANGUAGE_INSTRUCTIONS: Record<SupportedLanguage, string> = {
 {
   "original": "Câu trả lời bằng tiếng Nhật tự nhiên (Kanji/Kana, 1-3 câu)",
   "romanization": "Romaji viết bằng chữ cái Latin (ví dụ: Konnichiwa). TUYỆT ĐỐI KHÔNG dùng Hiragana/Katakana ở đây.",
-  "translation": "Dịch nghĩa tiếng Việt",
-  "userRomanization": "Romaji chữ Latin của câu người dùng vừa nói"
+  "translation": "Dịch nghĩa tiếng Việt của câu trả lời AI",
+  "userRomanization": "Romaji chữ Latin của câu người dùng vừa nói",
+  "userTranslation": "Dịch nghĩa tiếng Việt của câu người dùng vừa nói"
 }`,
 };
 

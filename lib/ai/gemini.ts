@@ -14,9 +14,15 @@ export function createGeminiClient(clientApiKey?: string): GoogleGenerativeAI {
   return new GoogleGenerativeAI(apiKey);
 }
 
-/** Model mặc định: Gemini 3.5 Flash Lite (nhanh nhất ~800ms) */
-export const GEMINI_CHAT_MODEL = 'gemini-3.5-flash-lite';
-const FAST_GEMINI_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.6-flash'];
+/** Model mặc định: Gemini 3.6 Flash (siêu nhanh, ổn định) */
+export const GEMINI_CHAT_MODEL = 'gemini-3.6-flash';
+const FAST_GEMINI_MODELS = [
+  'gemini-3.6-flash',
+  'gemini-3.8-flash',
+  'gemini-3.7-flash',
+  'gemini-3.5-flash',
+  'gemini-flash-latest',
+];
 
 function prepareHistory(history: { role: 'user' | 'assistant'; content: string }[]): {
   finalHistory: Content[];
@@ -71,7 +77,7 @@ export async function chatWithGemini(
         const model = genAI.getGenerativeModel({
           model: modelName,
           generationConfig: {
-            maxOutputTokens: 300,
+            maxOutputTokens: 1024,
             temperature: 0.7,
             responseMimeType: 'application/json',
           },
@@ -138,7 +144,7 @@ export async function* chatWithGeminiStream(
         const model = genAI.getGenerativeModel({
           model: modelName,
           generationConfig: {
-            maxOutputTokens: 300,
+            maxOutputTokens: 1024,
             temperature: 0.7,
             responseMimeType: 'application/json',
           },

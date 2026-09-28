@@ -48,6 +48,7 @@ export interface ConversationMessage {
   role: 'user' | 'assistant';
   original: string;         // Câu gốc (nguồn duy nhất cho TTS và dòng 1 History)
   romanization?: string;    // Phiên âm (Pinyin/Romaji/IPA) - CHỈ hiển thị giao diện dòng 2
+  pinyin?: string;          // Phiên âm Pinyin tiếng Trung (đồng bộ với romanization)
   translation?: string;     // Dịch tiếng Việt - CHỈ hiển thị giao diện dòng 3
   text?: string;            // Backward-compatible alias cho original
   audioBase64?: string;
@@ -84,6 +85,7 @@ export interface VoiceChatResponse {
   userTranscript: string;
   userPinyin?: string;         // Pinyin tương ứng với câu người dùng nói (tiếng Trung)
   userRomanization?: string;   // Romaji/Pinyin tương ứng với câu người dùng nói (đa ngôn ngữ)
+  userTranslation?: string;    // Dịch tiếng Việt câu người dùng nói
   pronunciationResult?: PronunciationAssessmentResult; // Kết quả phát âm
   pronunciationScore?: number | null; // Điểm phát âm tổng thể (0-100)
   assistantOriginal: string;    // Câu gốc từ AI dành riêng cho TTS và hiển thị dòng 1

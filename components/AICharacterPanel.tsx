@@ -23,6 +23,8 @@ interface AICharacterPanelProps {
   error: string;
   onMainButtonClick: () => void;
   mediaStream: MediaStream | null;
+  audioSource?: HTMLAudioElement | MediaStream | null;
+  audioElement?: HTMLAudioElement | null;
 }
 
 export default function AICharacterPanel({
@@ -34,12 +36,18 @@ export default function AICharacterPanel({
   error,
   onMainButtonClick,
   mediaStream,
+  audioSource,
+  audioElement,
 }: AICharacterPanelProps) {
   return (
     <div className="ai-character-panel">
       {/* Khung avatar 500x500 chứa ảnh nhân vật và nút mic overlay */}
       <div className="ai-character-stage">
-        <AICharacterAvatar tutorState={tutorState} />
+        <AICharacterAvatar
+          tutorState={tutorState}
+          audioSource={audioSource}
+          audioElement={audioElement}
+        />
 
         {/* Nút ghi âm floating badge overlay tại cạnh dưới */}
         <RecordButtonOverlay
@@ -53,7 +61,7 @@ export default function AICharacterPanel({
 
       {/* Hộp nhận diện giọng nói theo thời gian thực */}
       {(tutorState === 'listening' || tutorState === 'waiting') && (
-        <div className="ai-realtime-transcript glass-card animate-fade-in">
+        <div className="ai-realtime-transcript glass-card">
           <div className="flex items-center gap-2 mb-1.5">
             <span className="w-2 h-2 rounded-full bg-purple-500 animate-ping" />
             <span className="text-xs font-bold text-purple-600 uppercase tracking-wider">

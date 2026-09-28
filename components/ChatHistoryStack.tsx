@@ -129,13 +129,18 @@ export default function ChatHistoryStack({
               const isLast = idx === conversation.length - 1;
 
               if (msg.role === 'user') {
+                const userPinyin = msg.pinyin || msg.romanization || '';
+                const score = typeof msg.pronunciationScore === 'number'
+                  ? msg.pronunciationScore
+                  : (msg.pronunciationResult?.overallScore ?? null);
+
                 return (
                   <div key={msg.id} className={`chat-msg chat-msg-user ${isLast ? 'chat-msg-latest' : ''}`}>
-                    {/* Score badge */}
-                    {typeof msg.pronunciationScore === 'number' && (
-                      <div className={`chat-score-badge ${getScoreBadgeStyle(msg.pronunciationScore)}`}
-                        title={`Điểm phát âm: ${Math.round(msg.pronunciationScore)}%`}>
-                        {Math.round(msg.pronunciationScore)}%
+                    {/* Score badge bên trái bubble USER */}
+                    {typeof score === 'number' && (
+                      <div className={`chat-score-badge ${getScoreBadgeStyle(score)}`}
+                        title={`Điểm phát âm: ${Math.round(score)}%`}>
+                        {Math.round(score)}%
                       </div>
                     )}
 
@@ -143,10 +148,10 @@ export default function ChatHistoryStack({
                       <div className="flex items-start gap-2">
                         <span className="text-base mt-0.5 flex-shrink-0">👤</span>
                         <div className="flex-1 min-w-0">
-                          {/* Câu gốc */}
+                          {/* 1. Câu tiếng Trung */}
                           <p className="text-sm leading-relaxed font-semibold">{originalText}</p>
 
-                          {/* Pinyin / Romaji với tô đỏ âm sai */}
+                          {/* 2. Pinyin / Romaji với tô đỏ âm sai */}
                           {msg.pronunciationResult?.syllables && msg.pronunciationResult.syllables.length > 0 ? (
                             <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1.5">
                               {msg.pronunciationResult.syllables.map((s, si) => {
@@ -174,11 +179,18 @@ export default function ChatHistoryStack({
                                 );
                               })}
                             </div>
-                          ) : msg.romanization ? (
+                          ) : userPinyin ? (
                             <p className="text-xs text-white/80 leading-relaxed mt-1 font-mono">
-                              {msg.romanization}
+                              {userPinyin}
                             </p>
                           ) : null}
+
+                          {/* 3. Bản dịch tiếng Việt */}
+                          {msg.translation && (
+                            <p className="text-xs text-white/90 leading-relaxed mt-1 italic">
+                              {msg.translation}
+                            </p>
+                          )}
 
                           <div className="flex items-center gap-2 mt-2">
                             <span className="text-xs text-white/50">
@@ -193,23 +205,24 @@ export default function ChatHistoryStack({
               }
 
               // Assistant message
+              const assistantPinyin = msg.pinyin || msg.romanization || '';
               return (
                 <div key={msg.id} className={`chat-msg chat-msg-assistant ${isLast ? 'chat-msg-latest' : ''}`}>
                   <div className="chat-bubble chat-bubble-assistant">
                     <div className="flex items-start gap-2">
                       <span className="text-base mt-0.5 flex-shrink-0">🤖</span>
                       <div className="flex-1 min-w-0">
-                        {/* Original text */}
+                        {/* 1. Câu tiếng Trung */}
                         <p className="text-sm text-indigo-900/90 leading-relaxed font-semibold">
                           {originalText}
                         </p>
-                        {/* Romanization */}
-                        {msg.romanization && (
-                          <p className="text-sm text-indigo-900/60 leading-relaxed mt-1">
-                            {msg.romanization}
+                        {/* 2. Pinyin ngay bên dưới */}
+                        {assistantPinyin && (
+                          <p className="text-sm text-indigo-900/60 leading-relaxed mt-1 font-mono">
+                            {assistantPinyin}
                           </p>
                         )}
-                        {/* Translation (Vietnamese) */}
+                        {/* 3. Bản dịch tiếng Việt bên dưới nữa */}
                         {msg.translation && (
                           <p className="text-sm text-indigo-900/75 leading-relaxed mt-1 italic">
                             {msg.translation}

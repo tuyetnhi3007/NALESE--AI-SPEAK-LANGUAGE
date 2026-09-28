@@ -62,7 +62,13 @@ export class GeminiPronunciationAssessor implements PronunciationAssessorAdapter
     }
 
     const geminiKeys = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2].filter(Boolean) as string[];
-    const geminiModels = ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.5-flash'];
+    const geminiModels = [
+      'gemini-3.6-flash',
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+      'gemini-3.5-flash',
+      'gemini-flash-latest',
+    ];
     const detectedMimeType = detectAudioMimeType(audioBase64);
 
     // Xây dựng prompt thẩm định ngữ âm chuyên sâu theo từng ngôn ngữ

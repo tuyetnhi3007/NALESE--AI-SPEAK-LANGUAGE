@@ -535,15 +535,15 @@ h1, h2, h3 { font-family: 'Outfit', sans-serif; letter-spacing: -0.02em; }
     "lang"
     "chat";
   gap: 20px;
-  max-width: 1280px;
+  max-width: 1360px;
   margin: 0 auto;
   padding: 0 16px;
 }
 
 @media (min-width: 1024px) {
   .voice-layout-v2 {
-    /* Khung bên trái (main) cố định 500px, khung bên phải (lang, chat) chiếm phần còn lại */
-    grid-template-columns: 500px minmax(360px, 1fr);
+    /* Khung bên trái (main) ~48%, khung bên phải (lang, chat) ~52% */
+    grid-template-columns: minmax(440px, 48%) minmax(360px, 1fr);
     grid-template-rows: auto 1fr;
     grid-template-areas:
       "main lang"
@@ -580,19 +580,21 @@ h1, h2, h3 { font-family: 'Outfit', sans-serif; letter-spacing: -0.02em; }
   flex-direction: column;
   gap: 16px;
   width: 100%;
-  max-width: 500px;
+  max-width: 100%;
   margin: 0 auto;
 }
 
-/* Khung sân khấu 500x500 vuông cố định trên desktop */
+/* Khung sân khấu vuông 1:1 chuẩn xác ở mọi độ phân giải — KHÔNG BAO GIỜ MÉO ẢNH */
 .ai-character-stage {
   position: relative;
-  width: 500px;
-  height: 500px;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
   border-radius: 28px;
   overflow: hidden;
   box-shadow: 0 20px 48px -12px rgba(109, 40, 217, 0.18), 0 0 0 1px rgba(167, 139, 250, 0.28);
-  background: #f1f5f9;
+  background: #181528;
 }
 
 @media (max-width: 1023px) {
@@ -606,67 +608,27 @@ h1, h2, h3 { font-family: 'Outfit', sans-serif; letter-spacing: -0.02em; }
   }
 }
 
-/* ─── AI CHARACTER AVATAR (Photorealistic frames) ───────── */
+/* ─── AI CHARACTER AVATAR (HTML5 Canvas Edition) ────────────
+   Render bằng AICharacterCanvas (context 2d { alpha: false }).
+   Hoàn toàn không dùng thẻ <img> chồng lớp hay CSS opacity transition.
+   Nền study room luôn phủ kín 100%, không bao giờ lộ nền trắng. */
 .ai-character-avatar-container {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+  aspect-ratio: 1 / 1;
   overflow: hidden;
+  background: #181528;
 }
 
-/* Subtle breathing animation layer */
-.ai-character-breathing-layer {
+.ai-character-canvas-root {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  animation: subtle-breath 4.8s ease-in-out infinite alternate;
-}
-
-@keyframes subtle-breath {
-  0% {
-    transform: translateY(0) scale(1);
-  }
-  50% {
-    transform: translateY(-3px) scale(1.008);
-  }
-  100% {
-    transform: translateY(0) scale(1);
-  }
-}
-
-/* Crossfade CSS giữa các frame ảnh */
-.ai-avatar-frame {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center center;
-  transition: opacity 120ms ease-in-out;
-  pointer-events: none;
-  user-select: none;
-}
-
-.ai-avatar-frame.active {
-  opacity: 1;
-  z-index: 2;
-}
-
-.ai-avatar-frame.inactive {
-  opacity: 0;
-  z-index: 1;
-}
-
-/* Vignette overlay */
-.ai-avatar-vignette {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 3;
-  box-shadow: inset 0 0 35px rgba(0, 0, 0, 0.08);
-  background: radial-gradient(circle at 50% 40%, transparent 68%, rgba(15, 23, 42, 0.12) 100%);
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
 }
 
 /* ─── RECORD BUTTON OVERLAY (Floating badge) ────────────── */
@@ -697,13 +659,10 @@ h1, h2, h3 { font-family: 'Outfit', sans-serif; letter-spacing: -0.02em; }
   align-items: center;
   gap: 14px;
   padding: 10px 16px;
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.85);
   border-radius: 20px;
   box-shadow: 0 12px 32px -4px rgba(30, 27, 75, 0.22), 0 0 0 1px rgba(255, 255, 255, 0.5);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 @media (max-width: 480px) {
@@ -1111,38 +1070,45 @@ h1, h2, h3 { font-family: 'Outfit', sans-serif; letter-spacing: -0.02em; }
 /* Score badges */
 .chat-score-badge {
   flex-shrink: 0;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border-radius: 99px;
-  font-size: 0.65rem;
-  font-weight: 700;
+  font-size: 0.7rem;
+  font-weight: 700 !important;
   border: 1px solid;
   white-space: nowrap;
+  line-height: 1;
+  align-self: flex-start;
+  margin-top: 4px;
 }
 
-.score-badge-excellent {
-  border-color: rgba(52, 211, 153, 0.5);
-  background: rgba(52, 211, 153, 0.1);
-  color: #059669;
+.score-badge-excellent,
+*:not(.app-header):not(.app-header *).score-badge-excellent {
+  border-color: rgba(52, 211, 153, 0.6) !important;
+  background: rgba(52, 211, 153, 0.15) !important;
+  color: #059669 !important;
 }
-.score-badge-good {
-  border-color: rgba(251, 191, 36, 0.5);
-  background: rgba(251, 191, 36, 0.1);
-  color: #d97706;
+.score-badge-good,
+*:not(.app-header):not(.app-header *).score-badge-good {
+  border-color: rgba(251, 191, 36, 0.6) !important;
+  background: rgba(251, 191, 36, 0.15) !important;
+  color: #d97706 !important;
 }
-.score-badge-poor {
-  border-color: rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.1);
-  color: #dc2626;
+.score-badge-poor,
+*:not(.app-header):not(.app-header *).score-badge-poor {
+  border-color: rgba(239, 68, 68, 0.6) !important;
+  background: rgba(239, 68, 68, 0.15) !important;
+  color: #dc2626 !important;
 }
 
-/* Syllable error highlight */
-.chat-syllable-error {
-  color: #dc2626;
-  font-weight: 700;
-  background: rgba(239, 68, 68, 0.08);
-  padding: 1px 4px;
-  border-radius: 4px;
-  border: 1px solid rgba(239, 68, 68, 0.25);
+/* Syllable error highlight — màu đỏ nổi bật */
+.chat-syllable-error,
+*:not(.app-header):not(.app-header *).chat-syllable-error {
+  color: #ef4444 !important;
+  font-weight: 700 !important;
+  background: rgba(239, 68, 68, 0.16) !important;
+  padding: 1px 5px !important;
+  border-radius: 4px !important;
+  border: 1px solid rgba(239, 68, 68, 0.45) !important;
 }
 
 /* Replay button */
