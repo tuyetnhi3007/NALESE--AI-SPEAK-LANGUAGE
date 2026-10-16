@@ -63,6 +63,9 @@ Trả về JSON (không markdown, không text thừa):
       "id": "q2",
       "type": "fill-blank",
       "question": "Câu có ___ là chỗ trống",
+      "answer": "từ cần điền (chỉ chữ đích thuần, KHÔNG kèm phiên âm trong ngoặc)",
+      "reading": "phiên âm nếu có (Pinyin/Romaji)",
+      "acceptedAnswers": ["từ cần điền", "các cách viết hợp lệ khác"],
       "correctAnswer": "từ cần điền",
       "explanation": "Giải thích bằng tiếng Việt"
     },
@@ -70,16 +73,18 @@ Trả về JSON (không markdown, không text thừa):
       "id": "q3",
       "type": "translation",
       "question": "Dịch sang ${langName}: 'câu tiếng Việt'",
-      "correctAnswer": "bản dịch đúng",
+      "answer": "bản dịch (chỉ chữ đích thuần, KHÔNG kèm phiên âm trong ngoặc)",
+      "reading": "phiên âm nếu có (Pinyin/Romaji)",
+      "acceptedAnswers": ["bản dịch", "các cách dịch đúng khác"],
+      "correctAnswer": "bản dịch",
       "explanation": "Giải thích bằng tiếng Việt"
     }
   ]
 }
 
 QUY TẮC:
-- Multiple choice: đúng 4 options, 1 đáp án đúng.
-- Fill-blank: ___ là từ ngôn ngữ đích.
-- Translation: dịch TỪ tiếng Việt SANG ngôn ngữ đích.
+- Multiple choice: đúng 4 options, 1 đáp án đúng (correctAnswer là "A" hoặc chữ cái).
+- Fill-blank & Translation: trường "answer" CHỈ chứa từ/câu bằng ngôn ngữ đích, TUYỆT ĐỐI KHÔNG để phiên âm trong ngoặc vào "answer" hay "correctAnswer". Đặt phiên âm vào trường "reading" riêng biệt. "acceptedAnswers" chứa các cách viết đúng khác nếu có.
 - Explanation PHẢI bằng tiếng Việt và có phiên âm.
 - Chỉ trả về JSON hợp lệ.`;
 
@@ -110,7 +115,10 @@ QUY TẮC:
         type: q.type as ExerciseQuestion['type'],
         question: q.question as string,
         options: q.options as string[] | undefined,
-        correctAnswer: q.correctAnswer as string,
+        correctAnswer: (q.correctAnswer as string) || (q.answer as string) || '',
+        answer: (q.answer as string) || undefined,
+        reading: (q.reading as string) || undefined,
+        acceptedAnswers: Array.isArray(q.acceptedAnswers) ? (q.acceptedAnswers as string[]) : undefined,
         explanation: q.explanation as string,
       })),
       generatedAt: Date.now(),

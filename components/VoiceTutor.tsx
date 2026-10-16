@@ -15,6 +15,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Mic, MicOff, Volume2, RotateCcw, Sparkles, Square } from 'lucide-react';
 import AICharacterPanel from './AICharacterPanel';
 import ChatHistoryStack from './ChatHistoryStack';
+import LanguageSwitcher from './LanguageSwitcher';
 import { useSettings } from './SettingsContext';
 import { generateId, blobToBase64, getBestAudioMimeType } from '@/lib/audio-utils';
 import type { SupportedLanguage, ConversationMessage, VoiceChatRequest, VoiceChatResponse, SyllableAssessment } from '@/lib/types';
@@ -408,7 +409,8 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
   const sendToAI = useCallback(async (text: string, existingUserMsgId?: string, fallbackAudioBase64?: string) => {
     lastSpeechTimeRef.current = 0;
     setInterimTranscript('');
-    setFinalTranscript('');
+    // Giữ lại finalTranscript để phụ đề hiển thị câu hoàn chỉnh trong suốt lúc AI xử lý & trả lời
+    if (text) setFinalTranscript(text);
     setSilenceCountdown(null);
     setTutorState('thinking');
     setError('');
@@ -881,8 +883,17 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
         mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
         setMediaStream(mediaStreamRef.current);
       }
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('getUserMedia error on session start:', e);
+      const err = e as { name?: string; message?: string };
+      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+        setError('Không thể truy cập micro. Vui lòng cho phép quyền truy cập micro trong trình duyệt để tiếp tục luyện nói.');
+      } else {
+        setError('Không thể mở micro: ' + (err?.message || 'Vui lòng kiểm tra thiết bị.'));
+      }
+      sessionActiveRef.current = false;
+      setTutorState('idle');
+      return;
     }
     startListening();
   }, [startListening]);
@@ -978,8 +989,8 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
 
   // ─── Render ───────────────────────────────────────────────
   return (
-    <>
-      {/* Khu vực nhân vật AI + nút ghi âm */}
+    <div className="voice-layout-v2">
+      {/* Cột trái: Khung dải sóng âm + nút micro to + phụ đề */}
       <AICharacterPanel
         tutorState={tutorState}
         isSpeechSupported={isSpeechSupported}
@@ -989,14 +1000,24 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
         error={error}
         onMainButtonClick={handleMainButton}
         mediaStream={mediaStream}
+        language={language}
       />
 
-      {/* Lịch sử hội thoại — đặt ở sidebar bởi page.tsx */}
-      <ChatHistoryStack
-        conversation={conversation}
-        onClearConversation={clearConversation}
-        onReplayAudio={replayAudio}
-      />
-    </>
+      {/* Cột phải: Chọn ngôn ngữ + Khung lịch sử hội thoại */}
+      <div className="voice-right-col">
+        <div className="voice-lang-wrapper">
+          <LanguageSwitcher
+            language={language}
+            onLanguageChange={onLanguageChange || (() => {})}
+          />
+        </div>
+
+        <ChatHistoryStack
+          conversation={conversation}
+          onClearConversation={clearConversation}
+          onReplayAudio={replayAudio}
+        />
+      </div>
+    </div>
   );
 }

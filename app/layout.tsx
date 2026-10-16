@@ -1,5 +1,27 @@
 import type { Metadata } from 'next';
+import { Be_Vietnam_Pro, Noto_Sans_JP, Noto_Sans_SC } from 'next/font/google';
 import './globals.css';
+
+const beVietnamPro = Be_Vietnam_Pro({
+  weight: ['400', '500', '600', '700'],
+  subsets: ['latin', 'vietnamese'],
+  display: 'swap',
+  variable: '--font-sans',
+});
+
+const notoSansJP = Noto_Sans_JP({
+  weight: ['400', '500', '700'],
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-jp',
+});
+
+const notoSansSC = Noto_Sans_SC({
+  weight: ['400', '500', '700'],
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-sc',
+});
 
 export const metadata: Metadata = {
   metadataBase: new URL(
@@ -8,29 +30,21 @@ export const metadata: Metadata = {
   ),
   title: 'NALESE — AI Language Learning Tutor',
   description:
-    'A voice-based AI language tutor powered by GPT-4o. Learn English, Chinese (Mandarin), and Japanese through real-time voice conversations, vocabulary exercises, and immersive topic roleplays.',
-  keywords: ['language learning', 'AI tutor', 'voice learning', 'Chinese', 'Japanese', 'English', 'GPT-4o'],
+    'A voice-based AI language tutor powered by Gemini & GPT-4o. Learn English, Chinese (Mandarin), and Japanese through real-time voice conversations.',
+  keywords: ['language learning', 'AI tutor', 'voice learning', 'Chinese', 'Japanese', 'English'],
   authors: [{ name: 'NALESE' }],
-  openGraph: {
-    title: 'NALESE — AI Language Learning Tutor',
-    description: 'Real-time voice AI tutor for English, Chinese, and Japanese learners.',
-    type: 'website',
-  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="vi" suppressHydrationWarning>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
-        <meta name="theme-color" content="#08080f" />
-        <meta name="mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <meta name="theme-color" content="#FCF3EA" />
       </head>
-      <body>{children}</body>
+      <body className={`${beVietnamPro.variable} ${notoSansJP.variable} ${notoSansSC.variable} antialiased`}>
+        {children}
+      </body>
     </html>
   );
 }

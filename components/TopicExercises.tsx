@@ -19,6 +19,7 @@ import type {
   SupportedLanguage, LanguageLevel, ExerciseSet,
   ExerciseQuestion, TopicExerciseRequest
 } from '@/lib/types';
+import { isFillCorrect } from '@/lib/quiz-utils';
 
 interface TopicExercisesProps {
   selectedLanguage: SupportedLanguage;
@@ -98,6 +99,7 @@ export default function TopicExercises({ selectedLanguage, onLanguageChange }: T
   const [availableWords, setAvailableWords] = useState<string[]>([]);
   const [showResult, setShowResult] = useState(false);
   const [score, setScore] = useState(0);
+  const [isComposing, setIsComposing] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
   const [error, setError] = useState('');
 
@@ -232,11 +234,30 @@ export default function TopicExercises({ selectedLanguage, onLanguageChange }: T
     setSelectedAnswer(answer);
     setShowResult(true);
 
-    const correct = question.correctAnswer.trim().toLowerCase();
-    const given = answer.trim().toLowerCase();
-    const isCorrect = given === correct || correct.includes(given) || given.includes(correct.slice(0, 8));
-    if (isCorrect) setScore((s) => s + 1);
-  }, [showResult, question]);
+    const norm = (s: string) => (s || '').trim().toLowerCase().normalize('NFC').replace(/\s+/g, ' ');
+    const correct = norm(question.correctAnswer);
+    const given = norm(answer);
+
+    let isCorrect = given === correct || correct.includes(given) || (given.length > 5 && correct.includes(given.slice(0, 8)));
+
+    if (!isCorrect && (question.type === 'fill-blank' || question.type === 'translation' || question.type === 'error-correction')) {
+      const fillRes = isFillCorrect(answer, question as any, selectedLanguage);
+      if (fillRes.isCorrect) isCorrect = true;
+    }
+
+    if (!isCorrect && question.options && Array.isArray(question.options)) {
+      const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+      const optIdx = question.options.findIndex(o => norm(o) === given || norm(o).includes(given));
+      if (optIdx !== -1) {
+        const optLetter = letters[optIdx]?.toLowerCase();
+        if (correct === optLetter || correct.startsWith(`${optLetter}.`) || correct.startsWith(`${optLetter})`)) {
+          isCorrect = true;
+        }
+      }
+    }
+
+    if (isCorrect) setScore((prev) => prev + 1);
+  }, [showResult, question, selectedLanguage]);
 
   // ─── Next question ─────────────────────────────────────────
   const nextQuestion = useCallback(() => {
@@ -489,7 +510,17 @@ export default function TopicExercises({ selectedLanguage, onLanguageChange }: T
               {question.options.map((opt) => {
                 let cls = 'exercise-option text-sm';
                 if (showResult) {
-                  if (opt === question.correctAnswer) cls = 'exercise-option correct text-sm';
+                  const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+                  const optIdx = question.options?.indexOf(opt) ?? -1;
+                  const optLetter = letters[optIdx]?.toLowerCase();
+                  const normCorrect = question.correctAnswer.trim().toLowerCase();
+                  const isThisCorrect =
+                    opt.trim().toLowerCase() === normCorrect ||
+                    optLetter === normCorrect ||
+                    normCorrect.startsWith(`${optLetter}.`) ||
+                    normCorrect.startsWith(`${optLetter})`);
+
+                  if (isThisCorrect) cls = 'exercise-option correct text-sm';
                   else if (opt === selectedAnswer) cls = 'exercise-option incorrect text-sm';
                   else cls = 'exercise-option opacity-40 text-sm';
                 }
@@ -510,7 +541,14 @@ export default function TopicExercises({ selectedLanguage, onLanguageChange }: T
               type="text"
               value={userInput}
               onChange={(e) => setUserInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !showResult && checkAnswer(userInput)}
+              onCompositionStart={() => setIsComposing(true)}
+              onCompositionEnd={() => setIsComposing(false)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  if (isComposing || (e.nativeEvent as any).isComposing) return;
+                  if (!showResult && userInput.trim()) checkAnswer(userInput);
+                }
+              }}
               disabled={showResult}
               placeholder={
                 question.type === 'translation' ? 'Nhập bản dịch...' :
@@ -520,7 +558,11 @@ export default function TopicExercises({ selectedLanguage, onLanguageChange }: T
               className="glass-input flex-1"
             />
             {!showResult && (
-              <button onClick={() => checkAnswer(userInput)} className="btn-primary px-4">
+              <button
+                onClick={() => checkAnswer(userInput)}
+                disabled={!userInput.trim()}
+                className="btn-primary px-4 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 Kiểm tra
               </button>
             )}

@@ -119,6 +119,9 @@ export interface ExerciseQuestion {
   options?: string[];           // Cho multiple-choice
   words?: string[];             // Cho sentence-ordering (các từ bị xáo trộn)
   correctAnswer: string;        // Đáp án đúng
+  answer?: string;               // Chữ đích thuần (không kèm phiên âm trong ngoặc)
+  reading?: string;              // Phiên âm riêng (Pinyin / Romaji)
+  acceptedAnswers?: string[];    // Danh sách các cách viết / đồng nghĩa được chấp nhận
   explanation: string;          // Giải thích bằng tiếng Việt
   audioText?: string;           // Text để đọc qua TTS (cho listening/speaking)
   vocabRef?: VocabEntry;

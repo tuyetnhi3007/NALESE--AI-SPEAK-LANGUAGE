@@ -15,7 +15,6 @@
 import React, { useState, useCallback } from 'react';
 import Header from '@/components/Header';
 import VoiceTutor from '@/components/VoiceTutor';
-import LanguageSwitcher from '@/components/LanguageSwitcher';
 import VocabManager from '@/components/VocabManager';
 import TopicExercises from '@/components/TopicExercises';
 import { SettingsProvider } from '@/components/SettingsContext';
@@ -31,7 +30,7 @@ export default function Home() {
 
   return (
     <SettingsProvider>
-      <div className="min-h-screen flex flex-col">
+      <div className="app-shell flex flex-col">
         <Header
           activeTab={activeTab}
           onTabChange={setActiveTab}
@@ -40,23 +39,10 @@ export default function Home() {
           latencyMs={latencyMs}
         />
 
-        <main className="app-main flex-1">
-
+        <main className={`app-main flex-1 ${activeTab !== 'voice' ? 'app-main-scrollable' : ''}`}>
           {/* ── TAB: Gia Sư AI ── */}
           {activeTab === 'voice' && (
-            <div className="voice-layout-v2">
-              {/* VoiceTutor renders AICharacterPanel (grid-area: main)
-                  and ChatHistoryStack (grid-area: chat) as Fragment children */}
-              <VoiceTutor language={language} onLanguageChange={setLanguage} />
-
-              {/* LanguageSwitcher sits in sidebar (grid-area: lang) */}
-              <div className="voice-area-lang">
-                <LanguageSwitcher
-                  language={language}
-                  onLanguageChange={setLanguage}
-                />
-              </div>
-            </div>
+            <VoiceTutor language={language} onLanguageChange={setLanguage} />
           )}
 
           {/* ── TAB: Từ Vựng ── */}
@@ -70,16 +56,14 @@ export default function Home() {
           )}
         </main>
 
-        {/* Footer — desktop only */}
-        <footer className="hidden md:block border-t py-3 px-6 text-center"
-          style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
-          <p className="text-xs text-indigo-900/20">
-            NALESE · Gia sư ngoại ngữ AI ·{' '}
-            <span className="text-blue-400/50">Gemini 3.8 Flash</span> ·{' '}
-            <span className="text-emerald-400/50">Web Speech API</span> ·{' '}
-            <span className="text-purple-400/50">Browser TTS</span>
-          </p>
-        </footer>
+        {/* Footer — chỉ hiển thị khi không ở tab voice */}
+        {activeTab !== 'voice' && (
+          <footer className="hidden md:block py-2 text-center border-t border-[var(--border)]">
+            <p className="text-[12px] text-[var(--muted)] opacity-50">
+              NALESE
+            </p>
+          </footer>
+        )}
       </div>
     </SettingsProvider>
   );
