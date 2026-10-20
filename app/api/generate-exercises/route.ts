@@ -299,7 +299,7 @@ async function callGeminiWithRetry(
 
           if (text && text.trim().length > 0) {
             preferredModel = modelName; // Ghi nhớ model hoạt động tốt nhất
-            const usage = response.usageMetadata || {};
+            const usage = (response.usageMetadata as any) || {};
             return {
               text,
               metrics: {
