@@ -6,6 +6,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 import type { VocabEntry, ExerciseSet, ExerciseQuestion, SupportedLanguage, LanguageLevel } from '@/lib/types';
+import {
+  classifyGoogleError,
+  isModelInCooldown,
+  markModelCooldown,
+  getGlobalDailyResetHours,
+} from '@/lib/ai/errors';
 
 export const maxDuration = 80;
 
@@ -261,6 +267,8 @@ async function callGeminiWithRetry(
 
     for (const apiKey of keys) {
       for (const modelName of sortedModels) {
+        if (isModelInCooldown(modelName)) continue;
+
         let timer: NodeJS.Timeout | null = null;
         try {
           const genAI = new GoogleGenerativeAI(apiKey);
@@ -313,7 +321,10 @@ async function callGeminiWithRetry(
         } catch (err: any) {
           if (timer) clearTimeout(timer);
           lastError = err;
-          if (err.message?.includes('API_KEY_INVALID') || err.status === 401 || err.status === 403) {
+          const classified = classifyGoogleError(err);
+          markModelCooldown(modelName, classified.kind, classified.retryDelaySec);
+
+          if (classified.kind === 'KEY_INVALID') {
             break;
           }
         }
@@ -399,14 +410,29 @@ YÊU CẦU:
   } catch (error: any) {
     console.error('[generate-exercises] Error:', error);
     const rawMsg = error instanceof Error ? error.message : 'Lỗi hệ thống';
-    
-    // Thông báo thân thiện, không làm lộ API key hay prompt thô
+    const classified = classifyGoogleError(error);
+
+    if (classified.kind === 'KEY_INVALID' || rawMsg.includes('Chưa cấu hình GEMINI_API_KEY')) {
+      return NextResponse.json(
+        { error: 'API key không hợp lệ hoặc chưa cấu hình. Vui lòng kiểm tra lại khóa API.' },
+        { status: 500 }
+      );
+    }
+
+    if (classified.kind === 'DAILY_QUOTA_EXCEEDED') {
+      const resetHours = classified.resetHours || getGlobalDailyResetHours();
+      const msg = resetHours
+        ? `Hôm nay đã hết lượt dùng AI, vui lòng thử lại sau khoảng ${resetHours} giờ.`
+        : 'Hôm nay đã hết lượt dùng AI, vui lòng thử lại vào ngày mai';
+      return NextResponse.json({ error: msg, resetHours }, { status: 429 });
+    }
+
+    if (classified.kind === 'AI_BUSY') {
+      return NextResponse.json({ error: 'AI đang bận, vui lòng thử lại sau ít phút.' }, { status: 503 });
+    }
+
     let userMsg = 'Không thể tạo bài tập lúc này. Vui lòng thử lại sau giây lát.';
-    if (rawMsg.includes('Chưa cấu hình GEMINI_API_KEY')) {
-      userMsg = 'Chưa cấu hình API key. Vui lòng kiểm tra cài đặt.';
-    } else if (rawMsg.includes('API_KEY_INVALID')) {
-      userMsg = 'API key không hợp lệ. Vui lòng kiểm tra lại khóa API.';
-    } else if (rawMsg.includes('Không có dữ liệu từ vựng')) {
+    if (rawMsg.includes('Không có dữ liệu từ vựng')) {
       userMsg = 'Không có dữ liệu từ vựng để tạo bài tập.';
     }
 

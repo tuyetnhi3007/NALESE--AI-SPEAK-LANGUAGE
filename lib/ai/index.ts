@@ -60,7 +60,19 @@ export async function transcribeAudio(
   throw new Error('Không có STT provider nào được cấu hình. Cần GROQ_API_KEY.');
 }
 
-// ─── LLM: Gemini → OpenAI GPT-4o ─────────────────────────────
+import { areAllModelsInCooldown, getGlobalDailyResetHours } from './errors';
+import { FAST_GEMINI_MODELS } from './gemini';
+
+export class ChatSystemError extends Error {
+  kind: 'quota' | 'busy' | 'key';
+  resetHours?: number;
+  constructor(kind: 'quota' | 'busy' | 'key', message: string, resetHours?: number) {
+    super(message);
+    this.name = 'ChatSystemError';
+    this.kind = kind;
+    this.resetHours = resetHours;
+  }
+}
 
 interface ChatOptions {
   language: SupportedLanguage;
@@ -69,7 +81,7 @@ interface ChatOptions {
   history: { role: 'user' | 'assistant'; content: string }[];
   userMessage: string;
   vocabContext?: VocabEntry[];
-  clientApiKey?: string; // OpenAI key từ UI settings (nếu người dùng cung cấp)
+  clientApiKey?: string;
 }
 
 interface ChatResult {
@@ -80,12 +92,11 @@ interface ChatResult {
 
 /**
  * Gửi message đến AI và nhận response.
- * Ưu tiên Gemini (miễn phí tier), fallback sang OpenAI GPT-4o.
+ * Thứ tự ưu tiên: 1. Gemini -> 2. Groq -> 3. OpenRouter.
  */
 export async function chatWithAI(opts: ChatOptions): Promise<ChatResult> {
   const t0 = Date.now();
   console.log('[PERF] llm_start', t0);
-
   const systemPrompt = buildSystemPrompt({
     language: opts.language,
     level: opts.level,
@@ -96,25 +107,25 @@ export async function chatWithAI(opts: ChatOptions): Promise<ChatResult> {
   const errors: string[] = [];
   const safeHistory = (opts.history || []).slice(-8);
 
-  // Option 1: Gemini 3.5 Flash Lite (ưu tiên — miễn phí, siêu nhanh ~800ms)
+  // Option 1: Gemini (ưu tiên — miễn phí tier)
   if (process.env.GEMINI_API_KEY) {
-    try {
-      const { chatWithGemini } = await import('./gemini');
-      const text = await chatWithGemini(
-        systemPrompt,
-        safeHistory,
-        opts.userMessage,
-        opts.clientApiKey
-      );
-      console.log('[PERF] llm_end', Date.now(), `duration: ${Date.now() - t0}ms`);
-      return { text, provider: 'gemini' };
-    } catch (err: any) {
-      console.warn('[LLM] Gemini failed:', err);
-      errors.push(`Gemini: ${err.message}`);
+    if (!areAllModelsInCooldown(FAST_GEMINI_MODELS)) {
+      try {
+        const { chatWithGemini } = await import('./gemini');
+        const text = await chatWithGemini(
+          systemPrompt,
+          safeHistory,
+          opts.userMessage,
+          opts.clientApiKey
+        );
+        return { text, provider: 'gemini' };
+      } catch (err: any) {
+        errors.push(`Gemini: ${err.message}`);
+      }
     }
   }
 
-  // Option 2: Groq (fallback 1 — qwen3.8-27b siêu nhanh ~210ms)
+  // Option 2: Groq (fallback 1 — qwen3.8-27b siêu nhanh ~300-800ms)
   if (process.env.GROQ_API_KEY) {
     try {
       const { chatWithGroq } = await import('./groq');
@@ -124,10 +135,8 @@ export async function chatWithAI(opts: ChatOptions): Promise<ChatResult> {
         opts.userMessage,
         opts.clientApiKey
       );
-      console.log('[PERF] llm_end', Date.now(), `duration: ${Date.now() - t0}ms`);
       return { text, provider: 'groq' };
     } catch (err: any) {
-      console.warn('[LLM] Groq failed:', err);
       errors.push(`Groq: ${err.message}`);
     }
   }
@@ -142,17 +151,31 @@ export async function chatWithAI(opts: ChatOptions): Promise<ChatResult> {
         opts.userMessage,
         undefined
       );
-      console.log('[PERF] llm_end', Date.now(), `duration: ${Date.now() - t0}ms`);
       return { text: result.text, provider: 'openrouter', toolResults: result.toolResults };
     } catch (err: any) {
-      console.warn('[LLM] OpenRouter failed:', err);
       errors.push(`OpenRouter: ${err.message}`);
     }
   }
 
-  throw new Error(
-    `Tất cả LLM đều lỗi! ${errors.join(' | ')}`
-  );
+  // Khi TẤT CẢ nhà cung cấp đều lỗi: Phân loại lỗi chính xác, không dùng câu trả lời giả
+  const allErrStr = errors.join(' | ');
+
+  const resetHours = getGlobalDailyResetHours();
+  const isDailyQuota = allErrStr.includes('DAILY_QUOTA_EXCEEDED') || allErrStr.includes('PerDay') || allErrStr.includes('quota');
+  const isKeyInvalid = allErrStr.includes('KEY_INVALID') || allErrStr.includes('API_KEY_INVALID') || allErrStr.includes('401') || allErrStr.includes('403');
+
+  if (isDailyQuota) {
+    const msg = resetHours
+      ? `Hôm nay đã hết lượt dùng AI, vui lòng thử lại sau khoảng ${resetHours} giờ.`
+      : 'Hôm nay đã hết lượt dùng AI, vui lòng thử lại vào ngày mai.';
+    throw new ChatSystemError('quota', msg, resetHours);
+  }
+
+  if (isKeyInvalid) {
+    throw new ChatSystemError('key', 'API key không hợp lệ hoặc đã hết hạn. Vui lòng kiểm tra lại khóa API.');
+  }
+
+  throw new ChatSystemError('busy', 'Luna đang bận, vui lòng thử lại sau ít phút.');
 }
 
 /**
@@ -172,8 +195,9 @@ export async function* chatWithAIStream(
     vocabContext: opts.vocabContext,
   });
 
-  // Ưu tiên Gemini Stream
-  if (process.env.GEMINI_API_KEY) {
+  // Ưu tiên Gemini Stream (bỏ qua ngay nếu tất cả model Gemini đang cooldown)
+  const geminiCooldownStream = areAllModelsInCooldown(FAST_GEMINI_MODELS);
+  if (process.env.GEMINI_API_KEY && !geminiCooldownStream) {
     try {
       const { chatWithGeminiStream } = await import('./gemini');
       let first = true;

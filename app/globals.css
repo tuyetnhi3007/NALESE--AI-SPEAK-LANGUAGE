@@ -111,6 +111,24 @@ body {
   padding-bottom: 48px;
 }
 
+/* ─── TAB BÀI TẬP CHỦ ĐỀ: CUỘN TOÀN TRANG 100% WIDTH, THANH CUỘN SÁT MÉP PHẢI ─── */
+.app-main-topics {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 767px) {
+  .topic-sticky-bar {
+    bottom: var(--mobile-tab-h) !important;
+  }
+}
+
 /* ─── HEADER (Cao 56px, nền var(--card), viền dưới 1px var(--border)) ─── */
 .app-header {
   position: sticky;
@@ -644,4 +662,40 @@ body {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
+}
+
+/* ─── HIỆU ỨNG CỬA SỔ NỔI BÀI TẬP (EXERCISE MODAL) ─── */
+@keyframes exerciseBackdropFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes exercisePanelSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.exercise-modal-backdrop {
+  animation: exerciseBackdropFadeIn 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.exercise-modal-panel {
+  animation: exercisePanelSlideIn 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .exercise-modal-backdrop,
+  .exercise-modal-panel {
+    animation-duration: 0.01ms !important;
+  }
 }

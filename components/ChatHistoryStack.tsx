@@ -49,12 +49,14 @@ interface ChatHistoryStackProps {
   conversation: ConversationMessage[];
   onClearConversation: () => void;
   onReplayAudio: (msg: ConversationMessage) => void;
+  onReassess?: (msg: ConversationMessage) => void;
 }
 
 export default function ChatHistoryStack({
   conversation,
   onClearConversation,
   onReplayAudio,
+  onReassess,
 }: ChatHistoryStackProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -174,7 +176,7 @@ export default function ChatHistoryStack({
                         <span className="text-[var(--muted)]">
                           {new Date(msg.timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
                         </span>
-                        {typeof score === 'number' && (
+                        {typeof score === 'number' ? (
                           <span
                             className="font-medium text-[12px]"
                             style={{ color: getScoreColor(score) }}
@@ -182,6 +184,36 @@ export default function ChatHistoryStack({
                           >
                             Độ chính xác: {Math.round(score)}%
                           </span>
+                        ) : (
+                          (() => {
+                            const isQuota =
+                              msg.pronunciationErrorKind === 'quota' ||
+                              msg.pronunciationResult?.errorKind === 'quota';
+                            const label = isQuota ? 'Hết lượt chấm hôm nay' : 'Chưa chấm được';
+                            return (
+                              <div className="flex items-center gap-1.5 text-[12px]">
+                                <span className="text-[var(--muted)] font-medium">
+                                  Độ chính xác: —{' '}
+                                  <span className="text-[11px] font-normal text-[var(--muted)]/80">({label})</span>
+                                </span>
+                                {onReassess && (
+                                  <button
+                                    type="button"
+                                    disabled={isQuota}
+                                    onClick={() => onReassess(msg)}
+                                    className={`text-[11px] underline ml-1 ${
+                                      isQuota
+                                        ? 'text-[var(--muted)]/40 cursor-not-allowed'
+                                        : 'text-[var(--accent)] hover:text-[var(--accent-hover)] cursor-pointer'
+                                    }`}
+                                    title={isQuota ? 'Hôm nay đã hết lượt gọi AI' : 'Bấm để thử chấm lại phát âm'}
+                                  >
+                                    Chấm lại
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })()
                         )}
                       </div>
                     </div>

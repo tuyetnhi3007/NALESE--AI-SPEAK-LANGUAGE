@@ -39,7 +39,15 @@ export default function Home() {
           latencyMs={latencyMs}
         />
 
-        <main className={`app-main flex-1 ${activeTab !== 'voice' ? 'app-main-scrollable' : ''}`}>
+        <main
+          className={`flex-1 ${
+            activeTab === 'voice'
+              ? 'app-main'
+              : activeTab === 'vocab'
+              ? 'app-main app-main-scrollable'
+              : 'app-main-topics'
+          }`}
+        >
           {/* ── TAB: Gia Sư AI ── */}
           {activeTab === 'voice' && (
             <VoiceTutor language={language} onLanguageChange={setLanguage} />
@@ -56,8 +64,8 @@ export default function Home() {
           )}
         </main>
 
-        {/* Footer — chỉ hiển thị khi không ở tab voice */}
-        {activeTab !== 'voice' && (
+        {/* Footer — chỉ hiển thị ở tab Từ Vựng */}
+        {activeTab === 'vocab' && (
           <footer className="hidden md:block py-2 text-center border-t border-[var(--border)]">
             <p className="text-[12px] text-[var(--muted)] opacity-50">
               NALESE

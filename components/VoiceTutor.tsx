@@ -610,6 +610,23 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
                 }
               } else if (evt.type === 'error') {
                 setError(evt.error || 'Lỗi xử lý AI.');
+                setTutorState('idle');
+                isProcessingRef.current = false;
+                if (currentUserMsgId) {
+                  setConversation((prev) =>
+                    prev.map((m) =>
+                      m.id === currentUserMsgId
+                        ? {
+                            ...m,
+                            pronunciationScore: null,
+                            pronunciationErrorKind: evt.errorKind || 'error',
+                            pronunciationResetHours: evt.resetHours,
+                          }
+                        : m
+                    )
+                  );
+                }
+                return;
               }
             } catch {}
           }
@@ -631,6 +648,20 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
           setError(data.error);
           setTutorState('idle');
           isProcessingRef.current = false;
+          if (existingUserMsgId) {
+            setConversation((prev) =>
+              prev.map((m) =>
+                m.id === existingUserMsgId
+                  ? {
+                      ...m,
+                      pronunciationScore: null,
+                      pronunciationErrorKind: data.errorKind || 'error',
+                      pronunciationResetHours: data.resetHours,
+                    }
+                  : m
+              )
+            );
+          }
           return;
         }
 

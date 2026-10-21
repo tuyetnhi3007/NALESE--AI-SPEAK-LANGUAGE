@@ -176,7 +176,7 @@ export default function RecordButtonOverlay({
     if (tutorState === 'listening' || tutorState === 'waiting') {
       return <Square size={20} className="text-rose-500" fill="currentColor" />;
     }
-    return <Mic size={26} className="text-purple-600" />;
+    return <Mic size={26} style={{ color: 'var(--accent)' }} />;
   }, [tutorState]);
 
   return (

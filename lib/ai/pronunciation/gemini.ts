@@ -9,6 +9,13 @@ import type { PronunciationAssessorAdapter, AssessPronunciationOptions } from '.
 import type { PronunciationAssessmentResult, SyllableAssessment, PhonemeAssessment } from '@/lib/types';
 import { getPronunciationConfig } from './config';
 import { aggregateSyllableAssessment } from './mapper';
+import {
+  classifyGoogleError,
+  isModelInCooldown,
+  markModelCooldown,
+  areAllModelsInCooldown,
+  getGlobalDailyResetHours,
+} from '../errors';
 
 function detectAudioMimeType(base64: string): string {
   try {
@@ -137,13 +144,41 @@ Nhiệm vụ phân tích âm học:
 }`;
     }
 
+    if (areAllModelsInCooldown(geminiModels)) {
+      const resetHours = getGlobalDailyResetHours();
+      return {
+        provider: 'gemini',
+        referenceText,
+        overallScore: null,
+        syllables: [],
+        errorKind: 'quota',
+        errorMessage: resetHours
+          ? `Hết lượt chấm hôm nay (thử lại sau khoảng ${resetHours} giờ)`
+          : 'Hết lượt chấm hôm nay',
+        resetHours,
+      };
+    }
+
     let responseText = '';
+    const TOTAL_BUDGET_MS = 30000;
+    const PER_CALL_TIMEOUT_MS = 15000;
+    const startTime = Date.now();
+    let lastErrorKind: 'quota' | 'busy' | 'error' | undefined = undefined;
+    let lastResetHours: number | undefined = undefined;
 
     // 1. Thử qua các key và model Gemini với dữ liệu audio thực tế
     for (const key of geminiKeys) {
       if (responseText) break;
       for (const modelName of geminiModels) {
         if (responseText) break;
+        if (isModelInCooldown(modelName)) continue;
+
+        const remainingBudget = TOTAL_BUDGET_MS - (Date.now() - startTime);
+        if (remainingBudget <= 2000) break;
+
+        const effectiveTimeoutMs = Math.min(PER_CALL_TIMEOUT_MS, remainingBudget);
+        let timer: NodeJS.Timeout | null = null;
+
         try {
           const genAI = new GoogleGenerativeAI(key);
           const model = genAI.getGenerativeModel({
@@ -161,21 +196,55 @@ Nhiệm vụ phân tích âm học:
               mimeType: detectedMimeType,
             },
           };
-          const result = await model.generateContent([prompt, audioPart]);
+
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`Timeout ${Math.round(effectiveTimeoutMs / 1000)}s`)),
+              effectiveTimeoutMs
+            );
+          });
+
+          const result = await Promise.race([
+            model.generateContent([prompt, audioPart]),
+            timeoutPromise,
+          ]);
+          if (timer) clearTimeout(timer);
           responseText = result.response.text();
-        } catch (err) {
-          console.warn(`[GeminiPronunciation] Key/Model ${modelName} error:`, err);
+        } catch (err: any) {
+          if (timer) clearTimeout(timer);
+          const classified = classifyGoogleError(err);
+          markModelCooldown(modelName, classified.kind, classified.retryDelaySec);
+
+          lastErrorKind =
+            classified.kind === 'DAILY_QUOTA_EXCEEDED'
+              ? 'quota'
+              : classified.kind === 'AI_BUSY'
+              ? 'busy'
+              : 'error';
+          if (classified.resetHours) {
+            lastResetHours = classified.resetHours;
+          }
+
+          console.warn(`[GeminiPronunciation] Model ${modelName} error (${classified.kind}):`, err.message);
+          if (classified.kind === 'KEY_INVALID') break;
         }
       }
     }
 
     // Nếu không nhận được phản hồi âm thanh hợp lệ
     if (!responseText) {
+      const resetHours = lastResetHours || getGlobalDailyResetHours();
       return {
         provider: 'gemini',
         referenceText,
         overallScore: null,
         syllables: [],
+        errorKind: lastErrorKind || 'error',
+        errorMessage:
+          lastErrorKind === 'quota'
+            ? (resetHours ? `Hết lượt chấm hôm nay (thử lại sau khoảng ${resetHours} giờ)` : 'Hết lượt chấm hôm nay')
+            : 'Chưa chấm được',
+        resetHours,
       };
     }
 

@@ -13,12 +13,28 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server';
-import { transcribeAudio, chatWithAI, chatWithAIStream } from '@/lib/ai';
+import { transcribeAudio, chatWithAI, chatWithAIStream, ChatSystemError } from '@/lib/ai';
 import { assessPronunciation, getPronunciationConfig } from '@/lib/ai/pronunciation';
 import type { VoiceChatRequest, VoiceChatResponse, PronunciationAssessmentResult } from '@/lib/types';
 import { ensureRomaji } from '@/lib/japanese';
 
 export const maxDuration = 60;
+
+const PROMPT_LEAK_PATTERNS = [
+  /JSON formatting/i,
+  /Bạn là Luna/i,
+  /QUY TẮC PHẢN HỒI/i,
+  /TARGET:/i,
+  /Định dạng JSON bắt buộc/i,
+  /System Instruction/i,
+  /buildSystemPrompt/i,
+  /^\s*\{\s*"/,
+];
+
+function isPromptLeak(str: string): boolean {
+  if (!str) return false;
+  return PROMPT_LEAK_PATTERNS.some((pattern) => pattern.test(str));
+}
 
 export function parseAIResponse(raw: string): {
   original: string;
@@ -27,16 +43,25 @@ export function parseAIResponse(raw: string): {
   userRomanization?: string;
   userTranslation?: string;
 } {
-  if (!raw) return { original: '', romanization: '', translation: '' };
+  const fallback = {
+    original: 'Luna chưa nghe rõ, bạn nói lại nhé.',
+    romanization: '',
+    translation: 'Luna chưa nghe rõ, bạn nói lại nhé.',
+    userRomanization: undefined,
+    userTranslation: undefined,
+  };
+
+  if (!raw) return fallback;
   
   let cleaned = raw.trim();
   cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
 
-  // 1. Thử parse JSON hoàn chỉnh nếu có đủ cặp ngoặc {}
+  // 1. Thử parse JSON hoàn chỉnh nếu có đủ cặp ngoặc {} (đã xóa dấu phẩy thừa)
   const firstBrace = cleaned.indexOf('{');
   const lastBrace = cleaned.lastIndexOf('}');
   if (firstBrace !== -1 && lastBrace > firstBrace) {
-    const jsonCandidate = cleaned.slice(firstBrace, lastBrace + 1);
+    let jsonCandidate = cleaned.slice(firstBrace, lastBrace + 1);
+    jsonCandidate = jsonCandidate.replace(/,\s*([}\]])/g, '$1'); // Xóa dấu phẩy thừa
     try {
       const parsed = JSON.parse(jsonCandidate);
       if (parsed && typeof parsed === 'object') {
@@ -68,14 +93,14 @@ export function parseAIResponse(raw: string): {
           ? parsed.userTranslation.trim()
           : (typeof parsed.userVietnamese === 'string' ? parsed.userVietnamese.trim() : undefined);
 
-        if (original) {
+        if (original && !isPromptLeak(original)) {
           return { original, romanization, translation, userRomanization, userTranslation };
         }
       }
     } catch {}
   }
 
-  // 2. Trích xuất qua Regex (hỗ trợ cả khi JSON bị cắt cụt, thiếu dấu ngoặc kép hoặc ngoặc nhọn })
+  // 2. Trích xuất qua Regex (hỗ trợ cả khi JSON bị cắt cụt)
   const origMatch = cleaned.match(/"(?:original|originalText|chinese)"\s*:\s*"((?:[^"\\]|\\.)*)"?/i) || cleaned.match(/"(?:original|originalText|chinese)"\s*:\s*"([^"]*)/i);
   const romMatch = cleaned.match(/"(?:romanization|pinyin|romaji)"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
   const transMatch = cleaned.match(/"(?:translation|vietnamese)"\s*:\s*"((?:[^"\\]|\\.)*)"?/i);
@@ -84,29 +109,17 @@ export function parseAIResponse(raw: string): {
 
   if (origMatch && origMatch[1]) {
     const original = origMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim();
-    const romanization = romMatch && romMatch[1] ? romMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : '';
-    const translation = transMatch && transMatch[1] ? transMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : '';
-    const userRomanization = userRomMatch && userRomMatch[1] ? userRomMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : undefined;
-    const userTranslation = userTransMatch && userTransMatch[1] ? userTransMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : undefined;
-    if (original) {
+    if (original && !isPromptLeak(original)) {
+      const romanization = romMatch && romMatch[1] ? romMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : '';
+      const translation = transMatch && transMatch[1] ? transMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : '';
+      const userRomanization = userRomMatch && userRomMatch[1] ? userRomMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : undefined;
+      const userTranslation = userTransMatch && userTransMatch[1] ? userTransMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim() : undefined;
       return { original, romanization, translation, userRomanization, userTranslation };
     }
   }
 
-  // 3. Fallback: Nếu không match được, loại bỏ các ký tự thừa của JSON như {"original":
-  let fallback = cleaned
-    .replace(/^\s*\{\s*"original(?:Text)?"\s*:\s*"?/i, '')
-    .replace(/^\s*\{?\s*/, '')
-    .replace(/\s*\}?\s*$/, '')
-    .replace(/^"(?:original|originalText|response|text)"\s*:\s*"?/i, '')
-    .replace(/"?\s*$/, '')
-    .trim();
-
-  return {
-    original: fallback,
-    romanization: '',
-    translation: '',
-  };
+  // 3. Fallback an toàn: Trả thông báo thân thiện thay vì in text thô
+  return fallback;
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -279,8 +292,16 @@ export async function POST(request: NextRequest): Promise<Response> {
             controller.close();
           } catch (err: any) {
             console.error('[voice-chat-stream] Error:', err);
+            const isChatSysErr = err instanceof ChatSystemError;
             controller.enqueue(
-              encoder.encode(`data: ${JSON.stringify({ type: 'error', error: err.message || 'Lỗi stream' })}\n\n`)
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  type: 'error',
+                  error: err.message || 'Lỗi stream',
+                  errorKind: isChatSysErr ? err.kind : 'busy',
+                  resetHours: isChatSysErr ? err.resetHours : undefined,
+                })}\n\n`
+              )
             );
             controller.close();
           }
@@ -369,23 +390,36 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   } catch (error) {
     console.error('[voice-chat] Error:', error);
-    const message = error instanceof Error ? error.message : 'Lỗi không xác định.';
 
+    if (error instanceof ChatSystemError) {
+      const status = error.kind === 'quota' ? 429 : (error.kind === 'busy' ? 503 : 500);
+      return NextResponse.json<VoiceChatResponse>(
+        {
+          userTranscript: '',
+          assistantOriginal: '',
+          assistantText: '',
+          audioBase64: '',
+          latencyMs: Date.now() - startTime,
+          error: error.message,
+          errorKind: error.kind,
+          resetHours: error.resetHours,
+        },
+        { status }
+      );
+    }
+
+    const message = error instanceof Error ? error.message : 'Lỗi không xác định.';
     let userMessage = `Lỗi xử lý: ${message}`;
     if (message.includes('Tất cả LLM đều lỗi')) {
-      userMessage = 'Mình đang gặp một chút trục trặc, Hẹn gặp bạn lần sau nha';
+      userMessage = 'Luna đang bận, vui lòng thử lại sau ít phút.';
     } else if (message.includes('credit') || message.includes('quota') || message.includes('429') || message.includes('insufficient')) {
-      userMessage = `Lỗi Quota/Credits: ${message}`;
+      userMessage = 'Hôm nay đã hết lượt dùng AI, vui lòng thử lại vào ngày mai.';
     } else if (message.includes('GEMINI_API_KEY')) {
       userMessage = 'GEMINI_API_KEY chưa được cấu hình. Lấy key miễn phí tại aistudio.google.com/apikey';
     } else if (message.includes('GROQ_API_KEY')) {
       userMessage = 'GROQ_API_KEY chưa được cấu hình. Kiểm tra .env.local';
-    } else if (message.includes('API_KEY_INVALID') || message.includes('401') || message.includes('403') || message.includes('400') || message.includes('404')) {
-      userMessage = `Lỗi API: ${message} (Gemini/OpenAI key sai hoặc mô hình không tồn tại)`;
-    } else if (message.includes('LLM provider')) {
-      userMessage = 'Chưa có LLM nào hoạt động. Cần GEMINI_API_KEY (miễn phí) hoặc OPENAI_API_KEY có credits.';
-    } else if (message.includes('STT provider')) {
-      userMessage = 'Chưa cấu hình Speech-to-Text. Cần GROQ_API_KEY hoặc OPENAI_API_KEY.';
+    } else if (message.includes('API_KEY_INVALID') || message.includes('401') || message.includes('403')) {
+      userMessage = 'API key không hợp lệ hoặc đã hết hạn. Vui lòng kiểm tra lại khóa API.';
     }
 
     return NextResponse.json<VoiceChatResponse>(
@@ -396,6 +430,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         audioBase64: '',
         latencyMs: Date.now() - startTime,
         error: userMessage,
+        errorKind: 'unknown',
       },
       { status: 500 }
     );

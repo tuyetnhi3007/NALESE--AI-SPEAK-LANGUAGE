@@ -41,6 +41,9 @@ export interface PronunciationAssessmentResult {
   fluencyScore?: number;   // Điểm trôi chảy
   completenessScore?: number; // Điểm hoàn thiện
   syllables: SyllableAssessment[]; // Mảng âm tiết đã được tổng hợp
+  errorKind?: 'quota' | 'busy' | 'error';
+  errorMessage?: string;
+  resetHours?: number;
 }
 
 export interface ConversationMessage {
@@ -54,6 +57,8 @@ export interface ConversationMessage {
   audioBase64?: string;
   pronunciationResult?: PronunciationAssessmentResult; // Kết quả đánh giá phát âm cho USER
   pronunciationScore?: number | null; // Điểm tổng thể phát âm (0-100 hoặc null)
+  pronunciationErrorKind?: 'quota' | 'busy' | 'key' | 'error' | 'unknown';
+  pronunciationResetHours?: number;
   timestamp: number;
   toolResults?: ToolResult[];
 }
@@ -96,6 +101,8 @@ export interface VoiceChatResponse {
   toolResults?: ToolResult[];
   latencyMs: number;
   error?: string;
+  errorKind?: 'quota' | 'busy' | 'key' | 'unknown';
+  resetHours?: number;
   sttProvider?: string;        // Provider đã dùng: 'groq' | 'web-speech' | 'openai-whisper'
   llmProvider?: string;        // Provider đã dùng: 'gemini' | 'openai'
   ttsProvider?: string;        // Provider đã dùng: 'browser-tts' | 'openai-tts'

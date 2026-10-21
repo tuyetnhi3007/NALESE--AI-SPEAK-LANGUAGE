@@ -111,8 +111,8 @@ export default function TopicRoleplay({
     <div className="space-y-4">
       {/* Language Selector */}
       <div className="glass-card p-5">
-        <h2 className="text-lg font-display font-bold text-white mb-4 flex items-center gap-2">
-          <Globe size={18} className="text-purple-400" />
+        <h2 className="text-lg font-display font-bold text-[var(--text)] mb-4 flex items-center gap-2">
+          <Globe size={18} style={{ color: 'var(--accent)' }} />
           Language Selection
         </h2>
         <div className="grid grid-cols-3 gap-3">
@@ -122,15 +122,15 @@ export default function TopicRoleplay({
               onClick={() => onLanguageChange(lang.code)}
               className={`p-4 rounded-2xl border text-center transition-all ${
                 selectedLanguage === lang.code
-                  ? 'border-purple-500/60 bg-purple-500/15'
-                  : 'border-white/8 bg-white/3 hover:border-white/20 hover:bg-white/5'
+                  ? 'border-[var(--accent)] bg-[var(--bubble-user)]'
+                  : 'border-[var(--border)] bg-white hover:border-[var(--accent)]'
               }`}
             >
               <div className="text-3xl mb-2">{lang.flag}</div>
-              <div className={`font-display font-bold text-sm ${selectedLanguage === lang.code ? 'text-purple-200' : 'text-white/70'}`}>
+              <div className={`font-display font-bold text-sm ${selectedLanguage === lang.code ? 'text-[var(--text)]' : 'text-[var(--muted)]'}`}>
                 {lang.name}
               </div>
-              <div className={`text-xs mt-0.5 ${selectedLanguage === lang.code ? 'text-purple-300/70' : 'text-white/30'}`}>
+              <div className={`text-xs mt-0.5 text-[var(--muted)]`}>
                 {lang.nativeName}
               </div>
             </button>
@@ -140,8 +140,8 @@ export default function TopicRoleplay({
 
       {/* Topic Grid */}
       <div className="glass-card p-5">
-        <h2 className="text-lg font-display font-bold text-white mb-4 flex items-center gap-2">
-          <Sparkles size={18} className="text-purple-400" />
+        <h2 className="text-lg font-display font-bold text-[var(--text)] mb-4 flex items-center gap-2">
+          <Sparkles size={18} style={{ color: 'var(--accent)' }} />
           Choose a Scenario
         </h2>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -151,15 +151,15 @@ export default function TopicRoleplay({
               onClick={() => { setSelectedTopic(t.id); setShowPhrases(false); }}
               className={`glass-card-hover p-4 rounded-2xl border text-left transition-all ${
                 selectedTopic === t.id
-                  ? 'border-purple-500/60 bg-purple-500/12'
-                  : 'border-white/6 hover:border-purple-500/25'
+                  ? 'border-[var(--accent)] bg-[var(--bubble-user)]'
+                  : 'border-[var(--border)] hover:border-[var(--accent)]'
               }`}
             >
               <div className="text-2xl mb-2">{t.icon}</div>
-              <div className={`font-semibold text-sm leading-tight ${selectedTopic === t.id ? 'text-purple-200' : 'text-white/80'}`}>
+              <div className={`font-semibold text-sm leading-tight ${selectedTopic === t.id ? 'text-[var(--text)]' : 'text-[var(--muted)]'}`}>
                 {t.name}
               </div>
-              <div className="text-xs text-white/35 mt-1 leading-tight line-clamp-2">{t.description}</div>
+              <div className="text-xs text-[var(--muted)] mt-1 leading-tight line-clamp-2">{t.description}</div>
             </button>
           ))}
         </div>
@@ -167,12 +167,12 @@ export default function TopicRoleplay({
 
       {/* Selected Scenario Briefing */}
       {selectedTopic && topic && (
-        <div className="glass-card p-5" style={{ border: '1px solid rgba(139,92,246,0.2)' }}>
+        <div className="glass-card p-5" style={{ border: '1px solid var(--border)' }}>
           <div className="flex items-start justify-between gap-4 mb-4">
             <div>
               <div className="text-2xl mb-1">{topic.icon}</div>
-              <h3 className="text-xl font-display font-bold text-white">{topic.name}</h3>
-              <p className="text-white/50 text-sm mt-1">{topic.description}</p>
+              <h3 className="text-xl font-display font-bold text-[var(--text)]">{topic.name}</h3>
+              <p className="text-[var(--muted)] text-sm mt-1">{topic.description}</p>
             </div>
             <button
               onClick={handleStart}
@@ -201,7 +201,7 @@ export default function TopicRoleplay({
             <div>
               <button
                 onClick={() => setShowPhrases(!showPhrases)}
-                className="flex items-center gap-2 text-sm font-medium text-purple-300 hover:text-purple-200 transition-colors mb-3"
+                className="flex items-center gap-2 text-sm font-medium text-[var(--muted)] hover:text-[var(--accent)] transition-colors mb-3"
               >
                 <BookOpen size={14} />
                 {showPhrases ? 'Hide' : 'Show'} Suggested Phrases
@@ -213,11 +213,11 @@ export default function TopicRoleplay({
                   {phrases.map((p, i) => (
                     <div key={i} className="p-3 rounded-xl"
                       style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                      <div className="font-medium text-white text-sm">{p.phrase}</div>
+                      <div className="font-medium text-[var(--text)] text-sm">{p.phrase}</div>
                       {p.pronunciation !== p.phrase && (
-                        <div className="text-blue-300 text-xs font-mono mt-0.5">{p.pronunciation}</div>
+                        <div className="text-[var(--accent)] text-xs font-mono mt-0.5">{p.pronunciation}</div>
                       )}
-                      <div className="text-white/40 text-xs mt-0.5 italic">{p.meaning}</div>
+                      <div className="text-[var(--muted)] text-xs mt-0.5 italic">{p.meaning}</div>
                     </div>
                   ))}
                 </div>
@@ -227,10 +227,10 @@ export default function TopicRoleplay({
 
           {/* Start prompt */}
           <div className="mt-4 p-3 rounded-xl text-sm"
-            style={{ background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)' }}>
-            <span className="text-emerald-400 font-medium">💡 Ready to start?</span>
-            <span className="text-white/50 ml-2">
-              Click "Start Roleplay" to switch to Voice Tutor and begin your {topic.name} conversation with Luna!
+            style={{ background: 'var(--bubble-user)', border: '1px solid var(--border)' }}>
+            <span className="font-medium" style={{ color: 'var(--accent)' }}>Ready to start?</span>
+            <span className="text-[var(--muted)] ml-2">
+              Click &quot;Start Roleplay&quot; to switch to Voice Tutor and begin your {topic.name} conversation with Luna!
             </span>
           </div>
         </div>
@@ -238,8 +238,7 @@ export default function TopicRoleplay({
 
       {!selectedTopic && (
         <div className="glass-card p-8 text-center">
-          <div className="text-4xl mb-3">🎭</div>
-          <p className="text-white/40 text-sm">
+          <p className="text-[var(--muted)] text-sm">
             Select a language and topic above to see suggested phrases and start a roleplay session.
           </p>
         </div>

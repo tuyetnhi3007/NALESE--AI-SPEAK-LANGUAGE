@@ -82,7 +82,7 @@ export async function chatWithGroq(
       const response = await groq.chat.completions.create({
         messages,
         model,
-        max_tokens: 1024,
+        max_tokens: 800,
         temperature: 0.7,
         response_format: { type: 'json_object' },
       });

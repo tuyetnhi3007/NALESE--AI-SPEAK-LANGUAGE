@@ -56,7 +56,7 @@ export async function chatWithOpenRouter(
         messages,
         tools: tools ?? TOOLS,
         tool_choice: 'auto',
-        max_tokens: 300,
+        max_tokens: 800,
         temperature: 0.7,
       });
 
@@ -85,7 +85,7 @@ export async function chatWithOpenRouter(
         const followUp = await openrouter.chat.completions.create({
           model,
           messages: toolCallMessages as Parameters<typeof openrouter.chat.completions.create>[0]['messages'],
-          max_tokens: 400,
+          max_tokens: 800,
           temperature: 0.75,
         });
 
