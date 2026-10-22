@@ -32,6 +32,15 @@ export interface SyllableAssessment {
   note?: string;           // Ghi chú lỗi nếu có
 }
 
+export interface PronunciationWord {
+  text: string;
+  correct: boolean;
+  issue?: string;
+  offset?: number; // Vị trí bắt đầu trong câu (tuỳ chọn)
+}
+
+export type PronunciationStatus = 'assessing' | 'scored' | 'failed' | 'quota';
+
 // Kết quả tổng thể phiên đánh giá phát âm
 export interface PronunciationAssessmentResult {
   provider: 'azure' | 'gemini' | 'unassessed';
@@ -41,15 +50,18 @@ export interface PronunciationAssessmentResult {
   fluencyScore?: number;   // Điểm trôi chảy
   completenessScore?: number; // Điểm hoàn thiện
   syllables: SyllableAssessment[]; // Mảng âm tiết đã được tổng hợp
-  errorKind?: 'quota' | 'busy' | 'error';
+  words?: PronunciationWord[]; // VIỆC B: Danh sách từ đúng/sai và lỗi phát âm
+  errorKind?: 'quota' | 'busy' | 'key' | 'error' | 'unknown';
   errorMessage?: string;
   resetHours?: number;
+  note?: string; // Ghi chú thêm (ví dụ audio dài hơn 20s)
 }
 
 export interface ConversationMessage {
   id: string;
   role: 'user' | 'assistant';
   original: string;         // Câu gốc (nguồn duy nhất cho TTS và dòng 1 History)
+  language?: SupportedLanguage; // Ngôn ngữ của tin nhắn (để chấm lại đúng ngôn ngữ gốc)
   romanization?: string;    // Phiên âm (Pinyin/Romaji/IPA) - CHỈ hiển thị giao diện dòng 2
   pinyin?: string;          // Phiên âm Pinyin tiếng Trung (đồng bộ với romanization)
   translation?: string;     // Dịch tiếng Việt - CHỈ hiển thị giao diện dòng 3
@@ -57,8 +69,10 @@ export interface ConversationMessage {
   audioBase64?: string;
   pronunciationResult?: PronunciationAssessmentResult; // Kết quả đánh giá phát âm cho USER
   pronunciationScore?: number | null; // Điểm tổng thể phát âm (0-100 hoặc null)
+  pronunciationStatus?: PronunciationStatus; // Trạng thái: đang chấm | có điểm | chưa chấm được | hết lượt
   pronunciationErrorKind?: 'quota' | 'busy' | 'key' | 'error' | 'unknown';
   pronunciationResetHours?: number;
+  words?: PronunciationWord[]; // Lưu danh sách từ cùng tin nhắn trong lịch sử
   timestamp: number;
   toolResults?: ToolResult[];
 }

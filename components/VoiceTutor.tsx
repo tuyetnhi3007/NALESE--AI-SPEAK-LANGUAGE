@@ -18,7 +18,7 @@ import ChatHistoryStack from './ChatHistoryStack';
 import LanguageSwitcher from './LanguageSwitcher';
 import { useSettings } from './SettingsContext';
 import { generateId, blobToBase64, getBestAudioMimeType } from '@/lib/audio-utils';
-import type { SupportedLanguage, ConversationMessage, VoiceChatRequest, VoiceChatResponse, SyllableAssessment } from '@/lib/types';
+import type { SupportedLanguage, ConversationMessage, VoiceChatRequest, VoiceChatResponse, SyllableAssessment, PronunciationStatus, PronunciationWord } from '@/lib/types';
 import { parseAIResponse } from '@/app/api/voice-chat/route';
 
 type TutorState = 'idle' | 'listening' | 'waiting' | 'thinking' | 'speaking';
@@ -136,10 +136,27 @@ function sanitizeMessage(m: any): ConversationMessage {
     audioBase64 = undefined;
   }
 
+  // Bảo toàn danh sách từ phát âm sai (Việc B)
+  const words = Array.isArray(m.words)
+    ? m.words
+    : (Array.isArray(pronunciationResult?.words) ? pronunciationResult.words : undefined);
+
+  let pronunciationStatus: PronunciationStatus | undefined = m.pronunciationStatus;
+  if (!pronunciationStatus && m.role === 'user') {
+    if (typeof pronunciationScore === 'number') {
+      pronunciationStatus = 'scored';
+    } else if (m.pronunciationErrorKind === 'quota' || pronunciationResult?.errorKind === 'quota') {
+      pronunciationStatus = 'quota';
+    } else if (m.pronunciationErrorKind) {
+      pronunciationStatus = 'failed';
+    }
+  }
+
   return {
     id: m.id || generateId(),
     role: m.role || 'assistant',
     original,
+    language: m.language,
     romanization,
     pinyin,
     translation,
@@ -147,9 +164,92 @@ function sanitizeMessage(m: any): ConversationMessage {
     audioBase64,
     pronunciationResult,
     pronunciationScore,
+    pronunciationStatus,
+    pronunciationErrorKind: m.pronunciationErrorKind || pronunciationResult?.errorKind,
+    pronunciationResetHours: m.pronunciationResetHours || pronunciationResult?.resetHours,
+    words,
     timestamp: m.timestamp || Date.now(),
     toolResults: m.toolResults,
   };
+}
+
+// Chờ nhận diện giọng nói Web Speech kết thúc và chốt kết quả final (tối đa timeoutMs)
+function waitForFinalSpeechResult(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  recognition: any,
+  isListening: boolean,
+  timeoutMs = 1500
+): Promise<void> {
+  // Nếu recognition đã kết thúc từ trước (đã nhận onend, hoặc đang ở trạng thái không nghe), KHÔNG chờ: resolve ngay.
+  if (!recognition || !isListening) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    let timer: NodeJS.Timeout | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let onResultListener: ((e: any) => void) | null = null;
+    let onEndListener: (() => void) | null = null;
+
+    const cleanup = () => {
+      if (resolved) return;
+      resolved = true;
+      if (timer) clearTimeout(timer);
+      if (onResultListener && typeof recognition.removeEventListener === 'function') {
+        recognition.removeEventListener('result', onResultListener);
+      }
+      if (onEndListener && typeof recognition.removeEventListener === 'function') {
+        recognition.removeEventListener('end', onEndListener);
+      }
+      resolve();
+    };
+
+    timer = setTimeout(cleanup, timeoutMs);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onResultListener = (e: any) => {
+      let hasFinal = false;
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          hasFinal = true;
+        }
+      }
+      if (hasFinal) {
+        // Cho một khoảng đệm nhỏ (50ms) cho chunk liền kề rồi kết thúc
+        setTimeout(cleanup, 50);
+      }
+    };
+
+    onEndListener = () => {
+      cleanup();
+    };
+
+    if (typeof recognition.addEventListener === 'function') {
+      recognition.addEventListener('result', onResultListener);
+      recognition.addEventListener('end', onEndListener);
+    } else {
+      // Fallback nếu không hỗ trợ addEventListener: khôi phục handler khi xong
+      const prevResult = recognition.onresult;
+      const prevEnd = recognition.onend;
+      recognition.onresult = (e: any) => {
+        try { prevResult?.(e); } catch {}
+        onResultListener?.(e);
+      };
+      recognition.onend = () => {
+        try { prevEnd?.(); } catch {}
+        cleanup();
+        recognition.onresult = prevResult;
+        recognition.onend = prevEnd;
+      };
+    }
+
+    try {
+      recognition.stop();
+    } catch {
+      cleanup();
+    }
+  });
 }
 
 export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceTutorProps) {
@@ -168,6 +268,7 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
   // ─── Refs (truy cập được từ mọi closure mà không stale) ──
   const sessionActiveRef = useRef(false);
   const isProcessingRef = useRef(false);
+  const isListeningRef = useRef(false); // Trạng thái đang lắng nghe của Web Speech
   const accumulatedFinalRef = useRef('');
   const interimTranscriptRef = useRef('');
   const lastSpeechTimeRef = useRef(0); // timestamp của lần nói cuối
@@ -175,6 +276,7 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const audioStoreRef = useRef<Map<string, string>>(new Map()); // Giữ tối đa 10 tin nhắn gần nhất trong RAM
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const conversationRef = useRef<ConversationMessage[]>([]);
   const settingsRef = useRef(settings);
@@ -183,6 +285,22 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
   const topicRef = useRef(topic);
   const conversationEndRef = useRef<HTMLDivElement>(null);
   const startListeningRef = useRef<() => void>(() => {});
+
+  // Giữ tối đa 10 audio gần nhất trong RAM và tự giải phóng tin nhắn cũ
+  const storeMessageAudio = useCallback((msgId: string, audioBase64: string) => {
+    if (!msgId || !audioBase64) return;
+    audioStoreRef.current.set(msgId, audioBase64);
+
+    if (audioStoreRef.current.size > 10) {
+      const oldestId = audioStoreRef.current.keys().next().value;
+      if (oldestId) {
+        audioStoreRef.current.delete(oldestId);
+        setConversation((prev) =>
+          prev.map((m) => (m.id === oldestId ? { ...m, audioBase64: undefined } : m))
+        );
+      }
+    }
+  }, []);
 
   // Đồng bộ refs với props/state
   useEffect(() => { settingsRef.current = settings; }, [settings]);
@@ -206,11 +324,13 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
     }
   }, []);
 
-  // Lưu conversation vào localStorage mỗi khi thay đổi
+  // Lưu conversation vào localStorage (lọc bỏ audioBase64 để tránh lỗi QuotaExceededError 5MB)
   useEffect(() => {
     try {
       if (conversation.length > 0) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(conversation));
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const stripped = conversation.map(({ audioBase64, ...rest }) => rest);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(stripped));
       }
     } catch (e) {
       console.warn('Lỗi lưu conversation vào localStorage:', e);
@@ -352,8 +472,14 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
       await new Promise((r) => setTimeout(r, 40));
 
       if (audioChunksRef.current.length > 0) {
+        // Giới hạn audio gửi lên tối đa khoảng 20 giây (~200 chunks @ 100ms) để tiết kiệm token và hạn ngạch
+        const MAX_CHUNKS_20S = 200;
+        const chunksToUse = audioChunksRef.current.length > MAX_CHUNKS_20S
+          ? audioChunksRef.current.slice(0, MAX_CHUNKS_20S)
+          : audioChunksRef.current;
+
         const mimeType = getBestAudioMimeType();
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        const blob = new Blob(chunksToUse, { type: mimeType });
         audioChunksRef.current = [];
         if (blob.size > 200) {
           return await blobToBase64(blob);
@@ -394,6 +520,7 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
                     pronunciationResult: data.pronunciationResult,
                     pronunciationScore: typeof data.pronunciationScore === 'number' ? data.pronunciationScore : (data.pronunciationResult?.overallScore ?? null),
                     romanization: data.userRomanization || data.userPinyin || msg.romanization,
+                    words: data.pronunciationResult?.words || msg.words,
                   }
                 : msg
             )
@@ -493,6 +620,9 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
               const evt = JSON.parse(dataStr);
               if (evt.type === 'init' && evt.userTranscript && !currentUserMsgId) {
                 currentUserMsgId = generateId();
+                if (fallbackAudioBase64) {
+                  storeMessageAudio(currentUserMsgId, fallbackAudioBase64);
+                }
                 setConversation((prev) => [
                   ...prev,
                   {
@@ -500,6 +630,8 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
                     role: 'user',
                     original: evt.userTranscript,
                     text: evt.userTranscript,
+                    language: languageRef.current,
+                    audioBase64: fallbackAudioBase64,
                     pinyin: '',
                     romanization: '',
                     translation: '',
@@ -552,8 +684,17 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
                 const userPinyin = evt.userPinyin || evt.userRomanization || '';
                 const userTranslation = evt.userTranslation || '';
 
-                // Cập nhật điểm phát âm, Pinyin & Bản dịch cho user message
+                // Cập nhật điểm phát âm, Pinyin, Bản dịch & words cho user message
                 if (currentUserMsgId) {
+                  const pronRes = evt.pronunciationResult;
+                  const pronScore = typeof evt.pronunciationScore === 'number'
+                    ? evt.pronunciationScore
+                    : (typeof pronRes?.overallScore === 'number' ? pronRes.overallScore : null);
+                  const isQuota = evt.errorKind === 'quota' || pronRes?.errorKind === 'quota';
+                  const status: PronunciationStatus = typeof pronScore === 'number'
+                    ? 'scored'
+                    : (isQuota ? 'quota' : 'failed');
+
                   setConversation((prev) =>
                     prev.map((m) =>
                       m.id === currentUserMsgId
@@ -562,10 +703,12 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
                             pinyin: userPinyin || m.pinyin || m.romanization || '',
                             romanization: userPinyin || m.romanization || m.pinyin || '',
                             translation: userTranslation || m.translation || '',
-                            pronunciationResult: evt.pronunciationResult || m.pronunciationResult,
-                            pronunciationScore: typeof evt.pronunciationScore === 'number'
-                              ? evt.pronunciationScore
-                              : (evt.pronunciationResult?.overallScore ?? m.pronunciationScore),
+                            pronunciationResult: pronRes ?? m.pronunciationResult,
+                            pronunciationScore: pronScore,
+                            pronunciationStatus: status,
+                            pronunciationErrorKind: evt.errorKind || pronRes?.errorKind || (pronScore == null ? 'busy' : undefined),
+                            pronunciationResetHours: evt.resetHours || pronRes?.resetHours,
+                            words: pronRes?.words ?? m.words,
                           }
                         : m
                     )
@@ -668,6 +811,15 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
         const userPinyin = data.userPinyin || data.userRomanization || '';
         const userTranslation = data.userTranslation || '';
 
+        const pronRes = data.pronunciationResult;
+        const pronScore = typeof data.pronunciationScore === 'number'
+          ? data.pronunciationScore
+          : (typeof pronRes?.overallScore === 'number' ? pronRes.overallScore : null);
+        const isQuota = data.errorKind === 'quota' || pronRes?.errorKind === 'quota';
+        const status: PronunciationStatus = typeof pronScore === 'number'
+          ? 'scored'
+          : (isQuota ? 'quota' : 'failed');
+
         if (existingUserMsgId) {
           setConversation((prev) =>
             prev.map((m) =>
@@ -677,29 +829,39 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
                     pinyin: userPinyin || m.pinyin || m.romanization || '',
                     romanization: userPinyin || m.romanization || m.pinyin || '',
                     translation: userTranslation || m.translation || '',
-                    pronunciationResult: data.pronunciationResult || m.pronunciationResult,
-                    pronunciationScore: typeof data.pronunciationScore === 'number'
-                      ? data.pronunciationScore
-                      : (data.pronunciationResult?.overallScore ?? m.pronunciationScore),
+                    pronunciationResult: pronRes ?? m.pronunciationResult,
+                    pronunciationScore: pronScore,
+                    pronunciationStatus: status,
+                    pronunciationErrorKind: data.errorKind || pronRes?.errorKind || (pronScore == null ? 'busy' : undefined),
+                    pronunciationResetHours: data.resetHours || pronRes?.resetHours,
+                    words: pronRes?.words ?? m.words,
                   }
                 : m
             )
           );
         } else if (data.userTranscript) {
+          const newUserId = generateId();
+          if (fallbackAudioBase64) {
+            storeMessageAudio(newUserId, fallbackAudioBase64);
+          }
           setConversation((prev) => [
             ...prev,
             {
-              id: generateId(),
+              id: newUserId,
               role: 'user',
               original: data.userTranscript,
               text: data.userTranscript,
+              language: languageRef.current,
+              audioBase64: fallbackAudioBase64,
               pinyin: userPinyin,
               romanization: userPinyin,
               translation: userTranslation,
-              pronunciationResult: data.pronunciationResult,
-              pronunciationScore: typeof data.pronunciationScore === 'number'
-                ? data.pronunciationScore
-                : (data.pronunciationResult?.overallScore ?? null),
+              pronunciationResult: pronRes,
+              pronunciationScore: pronScore,
+              pronunciationStatus: status,
+              pronunciationErrorKind: data.errorKind || pronRes?.errorKind || (pronScore == null ? 'busy' : undefined),
+              pronunciationResetHours: data.resetHours || pronRes?.resetHours,
+              words: pronRes?.words,
               timestamp: Date.now(),
             },
           ]);
@@ -746,22 +908,37 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
   // ─── Kích hoạt gửi nhanh & song song ─────────────────────
   const triggerSend = useCallback(async () => {
     if (isProcessingRef.current) return;
-    const text = (accumulatedFinalRef.current.trim() || interimTranscriptRef.current.trim());
-    if (!text && !mediaRecorderRef.current) return;
 
     console.log('[PERF] recording_end', Date.now());
     lastSpeechTimeRef.current = 0;
     setSilenceCountdown(null);
     isProcessingRef.current = true;
 
-    try { recognitionRef.current?.abort(); } catch {}
+    // 1. Chờ kết quả nhận diện giọng nói Web Speech kết thúc (tối đa 1500ms)
+    // Thay abort() bằng stop() để thu thập trọn vẹn kết quả final, không bị rớt chữ cuối câu
+    await waitForFinalSpeechResult(recognitionRef.current, isListeningRef.current, 1500);
 
-    // Lấy audio base64 một cách an toàn (chỉ mất ~20-30ms)
+    // 2. Thu thập text hoàn chỉnh sau khi nhận diện đã chốt kết quả final
+    const finalPart = accumulatedFinalRef.current.trim();
+    const interimPart = interimTranscriptRef.current.trim();
+    const text = (finalPart && interimPart ? `${finalPart} ${interimPart}` : (finalPart || interimPart)).trim();
+
+    // 3. Lấy audio base64 một cách an toàn (chỉ mất ~20-30ms)
     const audioBase64 = await stopAndGetAudioBase64();
 
+    if (!text && !audioBase64) {
+      isProcessingRef.current = false;
+      setTutorState('idle');
+      return;
+    }
+
     if (text) {
-      // 1. User message được đưa ngay vào UI
+      // 1. User message được đưa ngay vào UI với trạng thái "đang chấm"
       const userMsgId = generateId();
+      if (audioBase64) {
+        storeMessageAudio(userMsgId, audioBase64);
+      }
+
       setConversation((prev) => [
         ...prev,
         {
@@ -769,10 +946,13 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
           role: 'user',
           original: text,
           text,
+          language: languageRef.current,
           pinyin: '',
           romanization: '',
           translation: '',
+          audioBase64,
           pronunciationScore: null,
+          pronunciationStatus: 'assessing',
           timestamp: Date.now(),
         },
       ]);
@@ -783,11 +963,8 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
     } else if (audioBase64) {
       // Fallback khi không có Web Speech API: Dùng Whisper STT
       sendToAIRef.current('', undefined, audioBase64);
-    } else {
-      isProcessingRef.current = false;
-      setTutorState('idle');
     }
-  }, [stopAndGetAudioBase64]);
+  }, [stopAndGetAudioBase64, storeMessageAudio]);
 
   const triggerSendRef = useRef(triggerSend);
   useEffect(() => { triggerSendRef.current = triggerSend; }, [triggerSend]);
@@ -818,6 +995,10 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
     recognition.interimResults = true;
     recognition.lang = SPEECH_LANG[languageRef.current] || 'en-US';
 
+    recognition.onstart = () => {
+      isListeningRef.current = true;
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onresult = (e: any) => {
       if (!sessionActiveRef.current) return;
@@ -840,6 +1021,7 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onerror = (e: any) => {
+      isListeningRef.current = false;
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
         setError('Trình duyệt không cho phép truy cập microphone. Kiểm tra quyền và thử lại.');
         sessionActiveRef.current = false;
@@ -849,6 +1031,7 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
     };
 
     recognition.onend = () => {
+      isListeningRef.current = false;
       // Tự động restart nếu session còn active và chưa gửi
       if (sessionActiveRef.current && !isProcessingRef.current) {
         setTimeout(() => {
@@ -933,6 +1116,7 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
   const stopSession = useCallback(() => {
     sessionActiveRef.current = false;
     isProcessingRef.current = false;
+    isListeningRef.current = false;
     lastSpeechTimeRef.current = 0;
 
     try { recognitionRef.current?.abort(); } catch {}
@@ -965,6 +1149,7 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
   useEffect(() => {
     return () => {
       sessionActiveRef.current = false;
+      isListeningRef.current = false;
       try { recognitionRef.current?.abort(); } catch {}
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         try { mediaRecorderRef.current.stop(); } catch {}
@@ -989,8 +1174,91 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
     speakWithBrowser(textToSpeak, () => {});
   }, [stopAudio, speakWithBrowser]);
 
+  // ─── Chấm lại phát âm theo yêu cầu (Nút "Chấm lại") ──────
+  const handleReassess = useCallback(async (msg: ConversationMessage) => {
+    const textToAssess = cleanOriginalString(msg.original || msg.text || '');
+    if (!textToAssess.trim()) return;
+
+    // Lấy audio: ưu tiên msg.audioBase64, fallback sang in-memory audioStoreRef
+    const audioData = msg.audioBase64 || audioStoreRef.current.get(msg.id);
+    if (!audioData) {
+      console.warn('[Pronunciation] Không có dữ liệu audio để chấm lại');
+      return;
+    }
+
+    // Giữ đúng ngôn ngữ gốc của tin nhắn msg.language nếu có, fallback sang languageRef.current
+    const targetLanguage = msg.language || languageRef.current;
+
+    // 1. Chuyển ngay sang trạng thái "assessing" (đang chấm) qua functional setState
+    setConversation((prev) =>
+      prev.map((m) =>
+        m.id === msg.id
+          ? {
+              ...m,
+              pronunciationStatus: 'assessing',
+              pronunciationErrorKind: undefined,
+            }
+          : m
+      )
+    );
+
+    try {
+      const resp = await fetch('/api/pronunciation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          referenceText: textToAssess,
+          language: targetLanguage,
+          audioBase64: audioData,
+        }),
+      });
+
+      const data = await resp.json();
+
+      if (resp.ok && (typeof data.overallScore === 'number' || data.words)) {
+        setConversation((prev) =>
+          prev.map((m) =>
+            m.id === msg.id
+              ? {
+                  ...m,
+                  pronunciationScore: typeof data.overallScore === 'number' ? data.overallScore : m.pronunciationScore,
+                  pronunciationStatus: 'scored',
+                  pronunciationErrorKind: undefined,
+                  words: data.words || m.words,
+                  pronunciationResult: data.pronunciationResult || m.pronunciationResult,
+                }
+              : m
+          )
+        );
+      } else {
+        const isQuota = data.errorKind === 'quota' || data.isDailyQuota;
+        setConversation((prev) =>
+          prev.map((m) =>
+            m.id === msg.id
+              ? {
+                  ...m,
+                  pronunciationStatus: isQuota ? 'quota' : 'failed',
+                  pronunciationErrorKind: data.errorKind || (isQuota ? 'quota' : 'error'),
+                  pronunciationResetHours: data.resetHours,
+                }
+              : m
+          )
+        );
+      }
+    } catch {
+      setConversation((prev) =>
+        prev.map((m) =>
+          m.id === msg.id
+            ? { ...m, pronunciationStatus: 'failed', pronunciationErrorKind: 'error' }
+            : m
+        )
+      );
+    }
+  }, []);
+
   const clearConversation = useCallback(() => {
     stopAudio();
+    audioStoreRef.current.clear();
     setConversation([]);
     setError('');
     try {
@@ -1018,6 +1286,10 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
     }
   }, [tutorState, startSession, stopAudio, stopSession, triggerSend]);
 
+  // Tìm từ chấm phát âm của tin nhắn người dùng mới nhất cho card trái
+  const latestUserMsg = [...conversation].reverse().find((m) => m.role === 'user');
+  const latestUserWords = latestUserMsg?.words || latestUserMsg?.pronunciationResult?.words;
+
   // ─── Render ───────────────────────────────────────────────
   return (
     <div className="voice-layout-v2">
@@ -1032,6 +1304,7 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
         onMainButtonClick={handleMainButton}
         mediaStream={mediaStream}
         language={language}
+        scoredWords={latestUserWords}
       />
 
       {/* Cột phải: Chọn ngôn ngữ + Khung lịch sử hội thoại */}
@@ -1047,6 +1320,7 @@ export default function VoiceTutor({ language, topic, onLanguageChange }: VoiceT
           conversation={conversation}
           onClearConversation={clearConversation}
           onReplayAudio={replayAudio}
+          onReassess={handleReassess}
         />
       </div>
     </div>

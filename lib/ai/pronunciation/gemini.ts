@@ -1,14 +1,19 @@
 // ============================================================
 // lib/ai/pronunciation/gemini.ts
 // Fallback Adapter: Audio-based Pronunciation Evaluator (Gemini)
+// Chấm phát âm trả kết quả TỪNG TỪ để tô đỏ từ sai
 // Hỗ trợ: zh-CN, en-US, ja-JP
 // ============================================================
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 import type { PronunciationAssessorAdapter, AssessPronunciationOptions } from './types';
-import type { PronunciationAssessmentResult, SyllableAssessment, PhonemeAssessment } from '@/lib/types';
+import type {
+  PronunciationAssessmentResult,
+  PronunciationWord,
+  SyllableAssessment,
+  SupportedLanguage,
+} from '@/lib/types';
 import { getPronunciationConfig } from './config';
-import { aggregateSyllableAssessment } from './mapper';
 import {
   classifyGoogleError,
   isModelInCooldown,
@@ -17,11 +22,151 @@ import {
   getGlobalDailyResetHours,
 } from '../errors';
 
+export interface ReferenceToken {
+  index: number;
+  text: string;
+  offset: number;
+}
+
+/**
+ * 1. Tách từ ở phía code bằng Intl.Segmenter theo granularity "word"
+ * Chỉ giữ các token có isWordLike = true.
+ * Đánh số token từ 0 kèm offset chuẩn để ScoredText khớp theo vị trí.
+ */
+export function tokenizeReferenceText(
+  text: string,
+  language: SupportedLanguage | string
+): ReferenceToken[] {
+  if (!text || !text.trim()) return [];
+
+  let locale = 'en';
+  const langLower = (language || '').toLowerCase();
+  if (langLower.startsWith('zh')) locale = 'zh';
+  else if (langLower.startsWith('ja')) locale = 'ja';
+  else if (langLower.startsWith('en')) locale = 'en';
+
+  try {
+    const segmenter = new Intl.Segmenter(locale, { granularity: 'word' });
+    const segments = Array.from(segmenter.segment(text));
+    const tokens: ReferenceToken[] = [];
+    let i = 0;
+    for (const seg of segments) {
+      if (seg.isWordLike) {
+        tokens.push({
+          index: i++,
+          text: seg.segment,
+          offset: seg.index,
+        });
+      }
+    }
+    return tokens;
+  } catch {
+    // Dự phòng khi Intl.Segmenter không khả dụng
+    const regex = /[\p{L}\p{N}]+/gu;
+    const tokens: ReferenceToken[] = [];
+    let match: RegExpExecArray | null;
+    let i = 0;
+    while ((match = regex.exec(text)) !== null) {
+      tokens.push({
+        index: i++,
+        text: match[0],
+        offset: match.index,
+      });
+    }
+    return tokens;
+  }
+}
+
+/**
+ * 3. Ghép kết quả theo chỉ số
+ * Ghép words từ Gemini với tokens theo i để tạo PronunciationWord { text, correct, issue, offset }.
+ * - Thiếu chỉ số nào: coi từ đó đúng (correct: true, issue: '').
+ * - Chỉ số thừa hoặc ngoài khoảng: tự động bỏ qua.
+ * - Gemini không trả words hoặc format sai: trả về undefined để caller bỏ words, không lỗi.
+ */
+export function mergePronunciationWords(
+  tokens: ReferenceToken[],
+  rawWords: any
+): PronunciationWord[] | undefined {
+  if (!Array.isArray(rawWords)) return undefined;
+
+  const wordMap = new Map<number, { correct: boolean; issue: string }>();
+  for (const item of rawWords) {
+    if (item && typeof item.i === 'number' && Number.isInteger(item.i)) {
+      wordMap.set(item.i, {
+        correct: typeof item.correct === 'boolean' ? item.correct : true,
+        issue: typeof item.issue === 'string' ? item.issue.trim() : '',
+      });
+    }
+  }
+
+  return tokens.map((token) => {
+    const matched = wordMap.get(token.index);
+    if (!matched) {
+      return {
+        text: token.text,
+        correct: true,
+        issue: '',
+        offset: token.offset,
+      };
+    }
+
+    const isCorrect = Boolean(matched.correct);
+    return {
+      text: token.text,
+      correct: isCorrect,
+      issue: isCorrect ? '' : (matched.issue || 'Phát âm chưa chuẩn'),
+      offset: token.offset,
+    };
+  });
+}
+
+/**
+ * 2. Response schema chuẩn cho Gemini chấm điểm phát âm từng từ
+ */
+export const pronunciationResponseSchema = {
+  type: SchemaType.OBJECT,
+  properties: {
+    overallScore: {
+      type: SchemaType.NUMBER,
+      description: 'Overall pronunciation score from 0 to 100',
+    },
+    accuracyScore: {
+      type: SchemaType.NUMBER,
+      description: 'Phonetic accuracy score from 0 to 100',
+    },
+    words: {
+      type: SchemaType.ARRAY,
+      description: 'Evaluation of each token matching index i',
+      items: {
+        type: SchemaType.OBJECT,
+        properties: {
+          i: {
+            type: SchemaType.INTEGER,
+            description: 'Token index starting from 0',
+          },
+          correct: {
+            type: SchemaType.BOOLEAN,
+            description: 'true if pronounced accurately, false otherwise',
+          },
+          issue: {
+            type: SchemaType.STRING,
+            description:
+              'Empty string if correct; if incorrect, brief explanation in Vietnamese (e.g. "thanh điệu sai: nên đọc thanh 3")',
+          },
+        },
+        required: ['i', 'correct', 'issue'],
+      },
+    },
+  },
+  required: ['overallScore', 'accuracyScore', 'words'],
+};
+
 function detectAudioMimeType(base64: string): string {
   try {
     const buffer = Buffer.from(base64.slice(0, 32), 'base64');
     if (buffer.length >= 4) {
-      if (buffer[0] === 0x1A && buffer[1] === 0x45 && buffer[2] === 0xDF && buffer[3] === 0xA3) {
+      if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) {
         return 'audio/webm';
       }
       if (buffer.toString('utf8', 0, 4) === 'RIFF') {
@@ -33,6 +178,12 @@ function detectAudioMimeType(base64: string): string {
       if (buffer.toString('utf8', 4, 8) === 'ftyp') {
         return 'audio/mp4';
       }
+      if (
+        buffer.toString('utf8', 0, 3) === 'ID3' ||
+        (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0)
+      ) {
+        return 'audio/mp3';
+      }
     }
   } catch {}
   return 'audio/webm';
@@ -42,7 +193,7 @@ export class GeminiPronunciationAssessor implements PronunciationAssessorAdapter
   readonly name = 'gemini' as const;
 
   isConfigured(): boolean {
-    return Boolean(process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_2 || process.env.OPENROUTER_API_KEY);
+    return Boolean(process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_2);
   }
 
   async assess(options: AssessPronunciationOptions): Promise<PronunciationAssessmentResult> {
@@ -58,7 +209,7 @@ export class GeminiPronunciationAssessor implements PronunciationAssessorAdapter
       };
     }
 
-    // Nếu không có audio thực tế từ mic, trả về unassessed (tuyệt đối không tạo score giả)
+    // Nếu không có audio thực tế từ mic, trả về unassessed
     if (!audioBase64 || audioBase64.length < 200) {
       return {
         provider: 'unassessed',
@@ -78,70 +229,74 @@ export class GeminiPronunciationAssessor implements PronunciationAssessorAdapter
     ];
     const detectedMimeType = detectAudioMimeType(audioBase64);
 
-    // Xây dựng prompt thẩm định ngữ âm chuyên sâu theo từng ngôn ngữ
+    // 4. Giới hạn audio: kiểm tra độ dài audio (> ~250k chars base64 tương đương > 20s)
+    const isLongAudio = audioBase64.length > 250000;
+
+    // 1. Tách từ ở phía code
+    const tokens = tokenizeReferenceText(referenceText, language);
+    const tokenListStr = tokens.length > 0
+      ? tokens.map((t) => `${t.index}: "${t.text}"`).join('\n')
+      : `0: "${referenceText}"`;
+
+    // 2. Schema và prompt chấm nghiêm khắc theo từng ngôn ngữ
     let prompt = '';
     if (config.locale === 'zh-CN') {
       prompt = `Bạn là chuyên gia thẩm định ngữ âm tiếng Trung Quốc (Mandarin zh-CN).
 Hãy nghe đoạn âm thanh thực tế của người dùng và đối chiếu với câu mục tiêu: "${referenceText}".
 
-Nhiệm vụ phân tích âm học:
-1. Đối chiếu âm thanh thực tế với từng chữ Hán và âm tiết Pinyin chuẩn (kèm dấu thanh điệu 1-4).
-2. Đảm bảo mảng "syllables" có đủ từng chữ Hán tương ứng với câu "${referenceText}".
-3. Đánh giá tính chính xác của phụ âm đầu (thanh mẫu), nguyên âm (vận mẫu), và thanh điệu (tones 1-4).
-4. Nếu phát âm đúng, cho điểm từ 75-100 và errorType là "None".
-5. Nếu phát âm sai thanh điệu (ví dụ thanh 3 đọc thành thanh 4), cho điểm dưới 70 và errorType là "ToneError".
-6. Nếu phát âm sai âm tiết hoặc nuốt chữ, cho điểm dưới 60 và errorType là "Mispronunciation" hoặc "Omission".
-7. QUAN TRỌNG: Chỉ những âm tiết người dùng phát âm sai mới cho điểm < 70 hoặc errorType khác "None". Các âm tiết đúng phải giữ errorType là "None" và điểm >= 75.
-8. Tính điểm tổng thể overallScore (0-100) và accuracyScore (0-100).
+Danh sách token cần đối chiếu (đánh số từ 0):
+${tokenListStr}
 
-Định dạng JSON bắt buộc:
-{
-  "overallScore": 85,
-  "accuracyScore": 84,
-  "syllables": [
-    {
-      "character": "你",
-      "pinyin": "nǐ",
-      "accuracyScore": 95,
-      "errorType": "None",
-      "phonemes": [
-        { "phoneme": "n", "accuracyScore": 96, "errorType": "None" },
-        { "phoneme": "i", "accuracyScore": 95, "errorType": "None" },
-        { "phoneme": "3", "accuracyScore": 94, "errorType": "None" }
-      ]
-    }
-  ]
-}`;
-    } else if (config.locale === 'en-US') {
-      prompt = `Bạn là chuyên gia thẩm định ngữ âm tiếng Anh (English en-US).
-Hãy nghe đoạn âm thanh thực tế của người dùng và đối chiếu với câu mục tiêu: "${referenceText}".
-
-Nhiệm vụ phân tích âm học:
-1. Đối chiếu âm thanh thực tế của người dùng với cách phát âm tiếng Anh chuẩn của từng từ trong câu: "${referenceText}".
-2. Đánh giá độ chính xác của nguyên âm (vowels), phụ âm (consonants), trọng âm từ (word stress) và ngữ điệu (intonation).
-3. Đánh giá phát âm thực tế: nếu phát âm chuẩn rõ ràng cho điểm từ 80-100, nếu phát âm sai/nuốt âm/ngọng cho điểm dưới 70.
-4. Tính điểm tổng thể overallScore (0-100) và accuracyScore (0-100) dựa trên âm thanh thực tế.
-
-Định dạng JSON bắt buộc:
-{
-  "overallScore": 85,
-  "accuracyScore": 84
-}`;
+Nhiệm vụ phân tích âm học và chấm điểm:
+1. Nghe kỹ âm thanh thực tế và đối chiếu với từng token theo đúng chỉ số i.
+2. LƯU Ý QUAN TRỌNG: Bộ nhận diện giọng nói (speech recognizer) có thể đã tự sửa chữ cho đúng ngữ cảnh ngữ pháp, do đó bạn PHẢI dựa hoàn toàn vào âm thanh thực tế trong audio để thẩm định, không được tin tưởng vào mặt chữ nếu audio phát âm sai.
+3. Chấm CỰC KỲ NGHIÊM KHẮC về thanh điệu (4 thanh điệu 1, 2, 3, 4, khinh thanh), phụ âm đầu (thanh mẫu) và nguyên âm (vận mẫu). Nếu người dùng đọc sai thanh điệu (ví dụ thanh 3 đọc thành thanh 4, thanh 1 đọc chúc xuống, hoặc đọc ngang không dấu), PHẢI đánh dấu correct: false và ghi ngắn gọn lỗi ở issue (ví dụ: "thanh điệu sai: nên đọc thanh 3").
+4. Quy định kết quả từng token:
+   - Mỗi token trong danh sách phải có đúng một phần tử trong mảng "words" theo đúng chỉ số i (0, 1, 2...).
+   - Nếu phát âm đúng chuẩn: "correct": true, "issue": "".
+   - Nếu phát âm sai: "correct": false, "issue": "lý do ngắn gọn bằng tiếng Việt".
+5. Giới hạn thời lượng audio: Chỉ lắng nghe và thẩm định trong tối đa 20 giây đầu tiên. Nếu audio dài hơn 20 giây, chỉ chấm phần đầu tương ứng với các từ xuất hiện trong 20 giây đầu.
+6. Tính điểm:
+   - overallScore (0-100): Điểm tổng thể dựa trên độ rõ ràng, trôi chảy và mức độ dễ hiểu của toàn bộ câu.
+   - accuracyScore (0-100): Điểm độ chính xác ngữ âm dựa trên tỷ lệ từ phát âm đúng và chuẩn thanh điệu.`;
     } else if (config.locale === 'ja-JP') {
       prompt = `Bạn là chuyên gia thẩm định ngữ âm tiếng Nhật (Japanese ja-JP).
 Hãy nghe đoạn âm thanh thực tế của người dùng và đối chiếu với câu mục tiêu: "${referenceText}".
 
-Nhiệm vụ phân tích âm học:
-1. Đối chiếu âm thanh thực tế của người dùng với cách phát âm tiếng Nhật chuẩn của từng từ/âm tiết trong câu: "${referenceText}".
-2. Đánh giá độ chính xác của trường âm (chōon), âm ngắt (sokuon), âm mũi (hatsuon), và cao độ âm điệu (pitch accent).
-3. Đánh giá phát âm thực tế: nếu phát âm chuẩn rõ ràng cho điểm từ 80-100, nếu phát âm sai/nuốt âm/ngọng cho điểm dưới 70.
-4. Tính điểm tổng thể overallScore (0-100) và accuracyScore (0-100) dựa trên âm thanh thực tế.
+Danh sách token cần đối chiếu (đánh số từ 0):
+${tokenListStr}
 
-Định dạng JSON bắt buộc:
-{
-  "overallScore": 85,
-  "accuracyScore": 84
-}`;
+Nhiệm vụ phân tích âm học và chấm điểm:
+1. Nghe kỹ âm thanh thực tế và đối chiếu với từng token theo đúng chỉ số i.
+2. LƯU Ý QUAN TRỌNG: Bộ nhận diện giọng nói (speech recognizer) có thể đã tự sửa chữ cho đúng ngữ cảnh ngữ pháp, do đó bạn PHẢI dựa hoàn toàn vào âm thanh thực tế trong audio để thẩm định, không được tin tưởng vào mặt chữ nếu audio phát âm sai.
+3. Chấm CỰC KỲ NGHIÊM KHẮC về cao độ âm điệu (pitch accent), trường âm (chōon), âm ngắt (sokuon), âm mũi (hatsuon) và độ chuẩn của các âm tiết. Nếu thiếu trường âm, nuốt âm ngắt hoặc phát âm sai lệch âm tiết, PHẢI đánh dấu correct: false và ghi ngắn gọn lỗi ở issue (ví dụ: "thiếu trường âm", "sai âm ngắt").
+4. Quy định kết quả từng token:
+   - Mỗi token trong danh sách phải có đúng một phần tử trong mảng "words" theo đúng chỉ số i (0, 1, 2...).
+   - Nếu phát âm đúng chuẩn: "correct": true, "issue": "".
+   - Nếu phát âm sai: "correct": false, "issue": "lý do ngắn gọn bằng tiếng Việt".
+5. Giới hạn thời lượng audio: Chỉ lắng nghe và thẩm định trong tối đa 20 giây đầu tiên. Nếu audio dài hơn 20 giây, chỉ chấm phần đầu tương ứng với các từ xuất hiện trong 20 giây đầu.
+6. Tính điểm:
+   - overallScore (0-100): Điểm tổng thể dựa trên độ rõ ràng, trôi chảy và tự nhiên của câu.
+   - accuracyScore (0-100): Điểm độ chính xác ngữ âm dựa trên tỷ lệ từ phát âm đúng chuẩn âm học.`;
+    } else {
+      prompt = `Bạn là chuyên gia thẩm định ngữ âm tiếng Anh (English en-US).
+Hãy nghe đoạn âm thanh thực tế của người dùng và đối chiếu với câu mục tiêu: "${referenceText}".
+
+Danh sách token cần đối chiếu (đánh số từ 0):
+${tokenListStr}
+
+Nhiệm vụ phân tích âm học và chấm điểm:
+1. Nghe kỹ âm thanh thực tế và đối chiếu với từng token theo đúng chỉ số i.
+2. LƯU Ý QUAN TRỌNG: Bộ nhận diện giọng nói (speech recognizer) có thể đã tự sửa chữ cho đúng ngữ cảnh ngữ pháp, do đó bạn PHẢI dựa hoàn toàn vào âm thanh thực tế trong audio để thẩm định, không được tin tưởng vào mặt chữ nếu audio phát âm sai.
+3. Chấm CỰC KỲ NGHIÊM KHẮC về nguyên âm (vowels), phụ âm (consonants), âm đuôi (ending sounds - ví dụ: /s/, /t/, /d/, /k/), trọng âm từ (word stress) và độ rõ ràng. Nếu nuốt âm đuôi, phát âm sai nguyên âm hoặc lệch trọng âm, PHẢI đánh dấu correct: false và ghi ngắn gọn lỗi ở issue (ví dụ: "nuốt âm đuôi /s/", "phát âm sai nguyên âm").
+4. Quy định kết quả từng token:
+   - Mỗi token trong danh sách phải có đúng một phần tử trong mảng "words" theo đúng chỉ số i (0, 1, 2...).
+   - Nếu phát âm đúng chuẩn: "correct": true, "issue": "".
+   - Nếu phát âm sai: "correct": false, "issue": "lý do ngắn gọn bằng tiếng Việt".
+5. Giới hạn thời lượng audio: Chỉ lắng nghe và thẩm định trong tối đa 20 giây đầu tiên. Nếu audio dài hơn 20 giây, chỉ chấm phần đầu tương ứng với các từ xuất hiện trong 20 giây đầu.
+6. Tính điểm:
+   - overallScore (0-100): Điểm tổng thể dựa trên độ rõ ràng, trôi chảy và ngữ điệu câu.
+   - accuracyScore (0-100): Điểm độ chính xác ngữ âm dựa trên tỷ lệ từ phát âm đúng và chuẩn âm vị.`;
     }
 
     if (areAllModelsInCooldown(geminiModels)) {
@@ -166,7 +321,7 @@ Nhiệm vụ phân tích âm học:
     let lastErrorKind: 'quota' | 'busy' | 'error' | undefined = undefined;
     let lastResetHours: number | undefined = undefined;
 
-    // 1. Thử qua các key và model Gemini với dữ liệu audio thực tế
+    // Thử qua các key và model Gemini với cấu hình thinkingBudget: 0, temperature: 0.2
     for (const key of geminiKeys) {
       if (responseText) break;
       for (const modelName of geminiModels) {
@@ -187,7 +342,11 @@ Nhiệm vụ phân tích âm học:
               temperature: 0.2,
               maxOutputTokens: 2048,
               responseMimeType: 'application/json',
-            },
+              responseSchema: pronunciationResponseSchema as any,
+              thinkingConfig: {
+                thinkingBudget: 0,
+              },
+            } as any,
           });
 
           const audioPart = {
@@ -231,7 +390,6 @@ Nhiệm vụ phân tích âm học:
       }
     }
 
-    // Nếu không nhận được phản hồi âm thanh hợp lệ
     if (!responseText) {
       const resetHours = lastResetHours || getGlobalDailyResetHours();
       return {
@@ -248,6 +406,7 @@ Nhiệm vụ phân tích âm học:
       };
     }
 
+    // 3. Parse JSON và ghép từ theo chỉ số
     try {
       let cleanJson = responseText.trim();
       if (cleanJson.includes('```')) {
@@ -261,38 +420,24 @@ Nhiệm vụ phân tích âm học:
 
       const parsed = JSON.parse(cleanJson);
       const overallScore = typeof parsed.overallScore === 'number' ? Math.round(parsed.overallScore) : null;
-      const syllables: SyllableAssessment[] = [];
+      const accuracyScore =
+        typeof parsed.accuracyScore === 'number'
+          ? Math.round(parsed.accuracyScore)
+          : (overallScore ?? undefined);
 
-      // CHỈ xử lý mảng syllables khi là tiếng Trung (script: pinyin)
-      if (config.script === 'pinyin' && Array.isArray(parsed.syllables)) {
-        for (const s of parsed.syllables) {
-          const char = typeof s.character === 'string' ? s.character : '';
-          const pinyin = typeof s.pinyin === 'string' ? s.pinyin : '';
-          const score = typeof s.accuracyScore === 'number' ? s.accuracyScore : 70;
-          const rawPhonemes: PhonemeAssessment[] = Array.isArray(s.phonemes)
-            ? s.phonemes.map((ph: any) => ({
-                phoneme: String(ph.phoneme || ''),
-                accuracyScore: typeof ph.accuracyScore === 'number' ? ph.accuracyScore : score,
-                errorType: ph.errorType || (ph.accuracyScore < 70 ? 'Mispronunciation' : 'None'),
-              }))
-            : [];
-
-          // Sử dụng aggregateSyllableAssessment để tổng hợp chuẩn xác các phoneme
-          const aggregated = aggregateSyllableAssessment(char, pinyin, rawPhonemes, score);
-          syllables.push({
-            ...aggregated,
-            note: s.note,
-          });
-        }
+      let mergedWords: PronunciationWord[] | undefined = undefined;
+      if (tokens.length > 0 && Array.isArray(parsed.words)) {
+        mergedWords = mergePronunciationWords(tokens, parsed.words);
       }
-      // en-US và ja-JP: syllables giữ [] để không bị gán sai vào Chinese Pinyin
 
       return {
         provider: 'gemini',
         referenceText,
         overallScore,
-        accuracyScore: typeof parsed.accuracyScore === 'number' ? parsed.accuracyScore : (overallScore ?? undefined),
-        syllables,
+        accuracyScore,
+        words: mergedWords,
+        syllables: [],
+        note: isLongAudio ? 'Audio dài hơn 20s, đã giới hạn chấm phần đầu.' : undefined,
       };
     } catch (err) {
       console.warn('[GeminiPronunciation] Lỗi parse JSON response:', err);

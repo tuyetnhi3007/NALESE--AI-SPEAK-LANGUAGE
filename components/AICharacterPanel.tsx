@@ -12,8 +12,10 @@
 import React, { useMemo } from 'react';
 import { AlertCircle } from 'lucide-react';
 import AudioWaveformVisualizer from './AudioWaveformVisualizer';
-import type { TutorState } from './AICharacterAvatar';
-import type { SupportedLanguage } from '@/lib/types';
+import type { SupportedLanguage, PronunciationWord } from '@/lib/types';
+import ScoredText from './ScoredText';
+
+export type TutorState = 'idle' | 'listening' | 'waiting' | 'thinking' | 'speaking';
 
 interface AICharacterPanelProps {
   tutorState: TutorState;
@@ -25,6 +27,7 @@ interface AICharacterPanelProps {
   onMainButtonClick: () => void;
   mediaStream: MediaStream | null;
   language?: SupportedLanguage;
+  scoredWords?: PronunciationWord[];
 }
 
 // Cấu hình nhãn trạng thái: chữ thường 13px, chấm tròn nhỏ (xám, đỏ, cam, accent)
@@ -61,6 +64,7 @@ export default function AICharacterPanel({
   onMainButtonClick,
   mediaStream,
   language = 'en',
+  scoredWords,
 }: AICharacterPanelProps) {
   const statusInfo = STATUS_CONFIG[tutorState] || STATUS_CONFIG.idle;
 
@@ -115,7 +119,9 @@ export default function AICharacterPanel({
               {hasSpokenContent ? (
                 <p className="voice-subtitle-text">
                   {completedText && (
-                    <span className="text-[var(--text)] font-medium">{completedText}</span>
+                    <span className="text-[var(--text)] font-medium">
+                      <ScoredText text={completedText} words={scoredWords} />
+                    </span>
                   )}
                   {interimText && (
                     <span className="text-[var(--muted)] font-normal">

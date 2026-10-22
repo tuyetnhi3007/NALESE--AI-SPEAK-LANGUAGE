@@ -9,6 +9,7 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { Volume2, RotateCcw, ChevronDown, MessageSquare } from 'lucide-react';
 import type { ConversationMessage } from '@/lib/types';
+import ScoredText from './ScoredText';
 
 function cleanOriginalString(raw: string): string {
   if (!raw) return '';
@@ -152,9 +153,9 @@ export default function ChatHistoryStack({
                 return (
                   <div key={msg.id} className="chat-msg-row user-row">
                     <div className="chat-bubble-user">
-                      {/* 1. Chữ gốc 16px màu var(--text) */}
+                      {/* 1. Chữ gốc 16px màu var(--text) có tô đỏ từ sai */}
                       <p className="text-[16px] text-[var(--text)] leading-snug font-medium line-clamp-3">
-                        {originalText}
+                        <ScoredText text={originalText} words={msg.words || msg.pronunciationResult?.words} />
                       </p>
 
                       {/* 2. Phiên âm 13px màu var(--muted) */}
@@ -171,50 +172,93 @@ export default function ChatHistoryStack({
                         </p>
                       )}
 
-                      {/* Footer tin nhắn: giờ + % độ chính xác (chỉ chữ đổi màu, không nền) */}
+                      {/* Footer tin nhắn: giờ + nhãn điểm với 4 trạng thái rõ ràng */}
                       <div className="flex items-center justify-between gap-2 mt-2 pt-1 border-t border-[var(--border)]/40 text-[12px]">
                         <span className="text-[var(--muted)]">
                           {new Date(msg.timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
                         </span>
-                        {typeof score === 'number' ? (
-                          <span
-                            className="font-medium text-[12px]"
-                            style={{ color: getScoreColor(score) }}
-                            title={`Điểm phát âm: ${Math.round(score)}%`}
-                          >
-                            Độ chính xác: {Math.round(score)}%
-                          </span>
-                        ) : (
-                          (() => {
-                            const isQuota =
-                              msg.pronunciationErrorKind === 'quota' ||
-                              msg.pronunciationResult?.errorKind === 'quota';
-                            const label = isQuota ? 'Hết lượt chấm hôm nay' : 'Chưa chấm được';
+
+                        {(() => {
+                          const isQuota =
+                            msg.pronunciationStatus === 'quota' ||
+                            msg.pronunciationErrorKind === 'quota' ||
+                            msg.pronunciationResult?.errorKind === 'quota';
+
+                          const isAssessing =
+                            msg.pronunciationStatus === 'assessing' ||
+                            (score == null && !isQuota && !msg.pronunciationErrorKind && msg.pronunciationStatus !== 'failed');
+
+                          // 1. Trạng thái: Có điểm (0-100)
+                          if (typeof score === 'number') {
+                            return (
+                              <span
+                                className="font-medium text-[12px]"
+                                style={{ color: getScoreColor(score) }}
+                                title={`Điểm phát âm: ${Math.round(score)}%`}
+                              >
+                                Độ chính xác: {Math.round(score)}%
+                              </span>
+                            );
+                          }
+
+                          // 2. Trạng thái: Đang chấm
+                          if (isAssessing) {
+                            return (
+                              <span className="text-[var(--muted)] font-medium">
+                                Độ chính xác:{' '}
+                                <span className="text-[11px] font-normal text-[var(--muted)]/80 animate-pulse">
+                                  Đang chấm...
+                                </span>
+                              </span>
+                            );
+                          }
+
+                          // 3. Trạng thái: Hết lượt chấm hôm nay (Quota)
+                          if (isQuota) {
                             return (
                               <div className="flex items-center gap-1.5 text-[12px]">
                                 <span className="text-[var(--muted)] font-medium">
                                   Độ chính xác: —{' '}
-                                  <span className="text-[11px] font-normal text-[var(--muted)]/80">({label})</span>
+                                  <span className="text-[11px] font-normal text-[var(--muted)]/80">
+                                    (Hết lượt chấm hôm nay)
+                                  </span>
                                 </span>
-                                {onReassess && (
+                                {onReassess && Boolean(msg.audioBase64) && (
                                   <button
                                     type="button"
-                                    disabled={isQuota}
-                                    onClick={() => onReassess(msg)}
-                                    className={`text-[11px] underline ml-1 ${
-                                      isQuota
-                                        ? 'text-[var(--muted)]/40 cursor-not-allowed'
-                                        : 'text-[var(--accent)] hover:text-[var(--accent-hover)] cursor-pointer'
-                                    }`}
-                                    title={isQuota ? 'Hôm nay đã hết lượt gọi AI' : 'Bấm để thử chấm lại phát âm'}
+                                    disabled={true}
+                                    className="text-[11px] underline ml-1 text-[var(--muted)]/40 cursor-not-allowed"
+                                    title="Hôm nay đã hết lượt gọi AI"
                                   >
                                     Chấm lại
                                   </button>
                                 )}
                               </div>
                             );
-                          })()
-                        )}
+                          }
+
+                          // 4. Trạng thái: Chưa chấm được (Lỗi mạng / bận / timeout)
+                          return (
+                            <div className="flex items-center gap-1.5 text-[12px]">
+                              <span className="text-[var(--muted)] font-medium">
+                                Độ chính xác: —{' '}
+                                <span className="text-[11px] font-normal text-[var(--muted)]/80">
+                                  (Chưa chấm được)
+                                </span>
+                              </span>
+                              {onReassess && Boolean(msg.audioBase64) && (
+                                <button
+                                  type="button"
+                                  onClick={() => onReassess(msg)}
+                                  className="text-[11px] underline ml-1 text-[var(--accent)] hover:text-[var(--accent-hover)] cursor-pointer"
+                                  title="Bấm để thử chấm lại phát âm"
+                                >
+                                  Chấm lại
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>

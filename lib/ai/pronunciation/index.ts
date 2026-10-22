@@ -65,7 +65,7 @@ export async function assessPronunciation(
     try {
       console.log('[PRON DEBUG] provider: gemini (attempting)');
       const result = await geminiAssessor.assess(options);
-      if (typeof result.overallScore === 'number') {
+      if (typeof result.overallScore === 'number' || result.errorKind) {
         console.log('[PRON DEBUG] provider: gemini');
         console.log('[PRON DEBUG] raw assessment:', JSON.stringify(result));
         console.log('[PRON DEBUG] overall score:', result.overallScore);
