@@ -40,3 +40,6 @@ Untitled*
 
 .vercel
 .env*
+
+# Raw vocabulary data
+data/

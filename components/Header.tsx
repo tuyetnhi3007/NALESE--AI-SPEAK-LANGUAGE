@@ -5,11 +5,15 @@
 // Icon nét mảnh lucide-react, gạch chân 2px var(--accent) cho active tab
 // ============================================================
 
-import React, { useState } from 'react';
-import { Mic, BookOpen, Target, Settings, Zap } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { Mic, BookOpen, Target, Settings, Zap, LogIn, LogOut, User as UserIcon } from 'lucide-react';
 import SettingsModal from './SettingsModal';
+import AuthModal from './AuthModal';
 import { useSettings } from './SettingsContext';
+import { createClient } from '@/lib/supabase/client';
 import type { SupportedLanguage, AppTab } from '@/lib/types';
+import type { User } from '@supabase/supabase-js';
 
 interface HeaderProps {
   activeTab: AppTab;
@@ -28,15 +32,43 @@ const TABS: { id: AppTab; label: string; icon: React.ComponentType<{ size?: numb
 export default function Header({
   activeTab, onTabChange, selectedLanguage, latencyMs,
 }: HeaderProps) {
+  const router = useRouter();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
   const { hasApiKey } = useSettings();
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const handleSignOut = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    setUser(null);
+    router.push('/login');
+    router.refresh();
+  };
 
   return (
     <>
       <header className="app-header">
         <div className="header-inner">
 
-          {/* Logo & Avatar góc trái (bỏ bóng tím) */}
+          {/* Logo & Avatar góc trái */}
           <div className="flex items-center gap-2.5 flex-shrink-0">
             <div className="w-8 h-8 rounded-full overflow-hidden flex items-center justify-center flex-shrink-0 border border-[var(--border)] bg-white">
               <img src="/logo.jpg" alt="Logo" className="w-full h-full object-cover" />
@@ -71,6 +103,37 @@ export default function Header({
                 <Zap size={11} className="text-[var(--accent)]" />
                 {latencyMs < 1000 ? `${latencyMs}ms` : `${(latencyMs / 1000).toFixed(1)}s`}
               </div>
+            )}
+
+            {/* Trạng thái tài khoản người dùng */}
+            {user ? (
+              <div className="flex items-center gap-1.5">
+                <div
+                  className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--text)] bg-[var(--bg)] border border-[var(--border)] max-w-[150px] truncate"
+                  title={user.email}
+                >
+                  <UserIcon size={13} className="text-[var(--accent)] flex-shrink-0" />
+                  <span className="truncate">{user.user_metadata?.full_name || user.email?.split('@')[0]}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  className="p-2 rounded-lg text-[var(--muted)] hover:text-[var(--danger)] hover:bg-[var(--bg)] transition-colors border border-[var(--border)]"
+                  title="Đăng xuất"
+                  aria-label="Đăng xuất"
+                >
+                  <LogOut size={16} />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setAuthModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[var(--accent)] hover:bg-[var(--accent-hover)] transition-colors shadow-sm"
+              >
+                <LogIn size={14} />
+                <span>Đăng nhập</span>
+              </button>
             )}
 
             {/* Settings button */}
@@ -109,6 +172,9 @@ export default function Header({
 
       {/* Settings Modal */}
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+      {/* Auth Modal */}
+      <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
     </>
   );
 }

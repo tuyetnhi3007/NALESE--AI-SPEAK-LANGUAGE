@@ -6,10 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "check:supabase": "tsx --env-file=.env.local scripts/check-supabase.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.118.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/canvas-confetti": "^1.9.0",
     "@types/node": "^26.4.0",
@@ -33,5 +36,8 @@
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
   }
 }

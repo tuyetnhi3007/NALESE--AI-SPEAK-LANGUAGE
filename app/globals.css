@@ -19,10 +19,12 @@
 }
 
 /* ─── Reset ─────────────────────────────────────────────── */
-*, *::before, *::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 }
 
 html {
@@ -699,3 +701,27 @@ body {
     animation-duration: 0.01ms !important;
   }
 }
+
+/* ─── Auth Input with Icon (Chống chữ và placeholder đè lên icon / nút ẩn hiện) ─── */
+.auth-input-with-icon {
+  padding-left: 44px;
+}
+
+.auth-input-with-icon.auth-input-password {
+  padding-right: 48px;
+}
+
+/* Giữ đúng padding khi trình duyệt tự động điền (autofill) */
+.auth-input-with-icon:-webkit-autofill,
+.auth-input-with-icon:-webkit-autofill:hover,
+.auth-input-with-icon:-webkit-autofill:focus {
+  padding-left: 44px;
+}
+
+.auth-input-with-icon.auth-input-password:-webkit-autofill,
+.auth-input-with-icon.auth-input-password:-webkit-autofill:hover,
+.auth-input-with-icon.auth-input-password:-webkit-autofill:focus {
+  padding-left: 44px;
+  padding-right: 48px;
+}
+
