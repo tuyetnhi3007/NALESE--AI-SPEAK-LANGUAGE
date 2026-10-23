@@ -1,0 +1,24 @@
+{
+  "language": "ja",
+  "name": "Japanese",
+  "columns": {
+    "position": ["No.", "STT", "No", "Index", "Số thứ tự", "番号"],
+    "term": ["Word", "Từ vựng", "Từ", "Vocabulary", "Term", "Kanji", "Từ Kanji", "単語"],
+    "word_type": ["Type", "Loại từ", "Từ loại", "Part of Speech", "POS", "品詞"],
+    "reading": ["Pronounce", "Phiên âm", "Romaji", "Cách đọc", "Katakana", "読み方", "ローマ字"],
+    "meaning_vi": ["Meaning", "Nghĩa tiếng Việt", "Nghĩa", "Ý nghĩa", "Dịch nghĩa", "Definition", "意味"],
+    "level": ["Level", "Cấp độ", "Trình độ", "JLPT", "JLPT Level", "レベル"]
+  },
+  "extra": [
+    "Hiragana",
+    "Ví dụ",
+    "Dịch ví dụ",
+    "Ghi chú",
+    "Example",
+    "Example Translation",
+    "Note",
+    "Notes",
+    "例文",
+    "ひらがな"
+  ]
+}

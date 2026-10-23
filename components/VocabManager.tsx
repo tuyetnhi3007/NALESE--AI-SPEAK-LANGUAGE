@@ -1183,7 +1183,14 @@ export default function VocabManager({ language, onVocabLoaded }: VocabManagerPr
                           color: 'var(--text)',
                         }}
                       >
-                        {entry.word}
+                        <div className="flex items-center gap-2">
+                          <span>{entry.word}</span>
+                          {entry.word_type && (
+                            <span className="text-[11px] font-medium px-1.5 py-0.5 rounded bg-[var(--bg)] text-[var(--muted)] border border-[var(--border)] tracking-normal">
+                              {entry.word_type}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td
                         style={{

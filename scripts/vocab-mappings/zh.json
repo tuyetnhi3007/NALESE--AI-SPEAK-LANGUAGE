@@ -1,0 +1,22 @@
+{
+  "language": "zh",
+  "name": "Chinese",
+  "columns": {
+    "position": ["No.", "STT", "No", "Index", "Số thứ tự", "序号"],
+    "term": ["Word", "Từ vựng", "Từ", "Vocabulary", "Term", "Chữ Hán", "生词", "词语", "汉字"],
+    "word_type": ["Type", "Loại từ", "Từ loại", "Part of Speech", "POS", "词性"],
+    "reading": ["Pronounce", "Phiên âm", "Pinyin", "Bính âm", "Phát âm", "拼音"],
+    "meaning_vi": ["Meaning", "Nghĩa tiếng Việt", "Nghĩa", "Ý nghĩa", "Dịch nghĩa", "Definition", "释义", "意思"],
+    "level": ["Level", "Cấp độ", "Trình độ", "HSK", "HSK Level", "等级"]
+  },
+  "extra": [
+    "Ví dụ",
+    "Dịch ví dụ",
+    "Ghi chú",
+    "Example",
+    "Example Translation",
+    "Note",
+    "Notes",
+    "例句"
+  ]
+}

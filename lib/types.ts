@@ -13,6 +13,7 @@ export interface VocabEntry {
   pronunciation: string; // Pinyin, Romaji, or IPA
   word: string;          // Target language character/word
   meaning: string;       // Vietnamese meaning
+  word_type?: string;    // Loại từ (danh từ, động từ, tính từ...)
 }
 
 // Đánh giá cấp độ âm tố (Phoneme level - bảo tồn nguyên vẹn kết quả từ provider)

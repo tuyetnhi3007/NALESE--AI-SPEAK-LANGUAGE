@@ -1,0 +1,21 @@
+{
+  "language": "en",
+  "name": "English",
+  "columns": {
+    "position": ["No.", "STT", "No", "Index", "Số thứ tự", "Order"],
+    "term": ["Word", "Từ vựng", "Từ", "Vocabulary", "Term", "English"],
+    "word_type": ["Type", "Loại từ", "Từ loại", "Part of Speech", "POS", "Word Type"],
+    "reading": ["Pronounce", "Phiên âm", "Pronunciation", "Phonetic", "IPA"],
+    "meaning_vi": ["Meaning", "Nghĩa tiếng Việt", "Nghĩa", "Ý nghĩa", "Dịch nghĩa", "Definition", "Vietnamese"],
+    "level": ["Level", "Cấp độ", "Trình độ", "CEFR", "Grade"]
+  },
+  "extra": [
+    "Ví dụ",
+    "Dịch ví dụ",
+    "Ghi chú",
+    "Example",
+    "Example Translation",
+    "Note",
+    "Notes"
+  ]
+}

@@ -13,10 +13,28 @@ export interface ParseResult {
 }
 
 /**
- * Validates and maps a raw row to a VocabEntry.
- * Expects exactly 4 columns (extra columns are ignored).
+ * Checks if a header string corresponds to "Loại từ" or "Type" (case-insensitive, unaccented).
  */
-function mapRowToEntry(row: string[], rowIndex: number): { entry?: VocabEntry; error?: string } {
+function isWordTypeHeader(header?: string): boolean {
+  if (!header) return false;
+  const normalized = header
+    .toString()
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  return normalized === 'loai tu' || normalized === 'type';
+}
+
+/**
+ * Validates and maps a raw row to a VocabEntry.
+ * Only extracts column 5 as word_type if hasWordTypeHeader is true.
+ */
+function mapRowToEntry(
+  row: string[],
+  rowIndex: number,
+  hasWordTypeHeader = false
+): { entry?: VocabEntry; error?: string } {
   // Filter out completely empty rows
   if (row.every((cell) => !cell || cell.toString().trim() === '')) {
     return {};
@@ -28,7 +46,7 @@ function mapRowToEntry(row: string[], rowIndex: number): { entry?: VocabEntry; e
     };
   }
 
-  const [indexCol, pronunciation, word, meaning] = row.map((c) => c?.toString().trim() || '');
+  const [indexCol, pronunciation, word, meaning, col5] = row.map((c) => c?.toString().trim() || '');
 
   // Index column can be a number or auto-generated
   const index = parseInt(indexCol, 10) || rowIndex;
@@ -40,12 +58,15 @@ function mapRowToEntry(row: string[], rowIndex: number): { entry?: VocabEntry; e
     return { error: `Row ${rowIndex + 1}: Vietnamese meaning (column 4) is empty.` };
   }
 
+  const word_type = hasWordTypeHeader && col5 ? col5 : undefined;
+
   return {
     entry: {
       index,
       pronunciation: pronunciation || word, // Fall back to word if pronunciation missing
       word,
       meaning,
+      ...(word_type ? { word_type } : {}),
     },
   };
 }
@@ -69,6 +90,12 @@ export function parseCSVText(csvText: string): ParseResult {
     firstLine.includes('pronunciation') ||
     firstLine.includes('meaning');
 
+  let hasWordTypeHeader = false;
+  if (isHeader && lines.length > 0) {
+    const headerCols = parseCSVLine(lines[0]);
+    hasWordTypeHeader = isWordTypeHeader(headerCols[4]);
+  }
+
   const startRow = isHeader ? 1 : 0;
 
   for (let i = startRow; i < lines.length; i++) {
@@ -77,7 +104,7 @@ export function parseCSVText(csvText: string): ParseResult {
 
     // Simple CSV split (handles quoted fields)
     const cols = parseCSVLine(line);
-    const { entry, error } = mapRowToEntry(cols, i);
+    const { entry, error } = mapRowToEntry(cols, i, hasWordTypeHeader);
     if (error) errors.push(error);
     if (entry) data.push(entry);
   }
@@ -136,14 +163,16 @@ export async function parseXLSXBuffer(buffer: ArrayBuffer): Promise<ParseResult>
     const rows: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as string[][];
 
     // Detect header row
-    const firstRow = rows[0]?.map((c) => c?.toString().toLowerCase()) || [];
+    const firstRow = rows[0]?.map((c) => c?.toString().trim()) || [];
+    const firstRowLower = firstRow.map((c) => c.toLowerCase());
     const isHeader =
-      firstRow.some((c) => ['stt', 'index', 'pinyin', 'pronunciation', 'meaning', 'word'].includes(c));
+      firstRowLower.some((c) => ['stt', 'index', 'pinyin', 'pronunciation', 'meaning', 'word'].includes(c));
 
+    const hasWordTypeHeader = isHeader && isWordTypeHeader(firstRow[4]);
     const startRow = isHeader ? 1 : 0;
 
     for (let i = startRow; i < rows.length; i++) {
-      const { entry, error } = mapRowToEntry(rows[i].map(String), i);
+      const { entry, error } = mapRowToEntry(rows[i].map(String), i, hasWordTypeHeader);
       if (error) errors.push(error);
       if (entry) data.push(entry);
     }

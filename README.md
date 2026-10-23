@@ -68,6 +68,47 @@ Download a [sample CSV template](./public/) from the Vocab Vault tab in the app.
 
 ---
 
+## 📥 Vocabulary Import Script (CLI)
+
+Nạp từ vựng vào bảng `public.vocab_items` qua script CLI với mapping linh hoạt, hỗ trợ chuẩn hóa header, xử lý loại từ (`word_type`), chống trùng lặp theo `UNIQUE (language, term, reading, word_type)`, xử lý thứ tự dòng (`position`) tự động và đọc phân trang an toàn.
+
+### Dạng lệnh chính:
+```bash
+npx tsx scripts/import-vocab.ts --file <đường dẫn> --mapping <file mapping> [--all-sheets] [--sheet <name>] [--no-sheet-name] [--dry-run] [--overwrite] [--merge-duplicates]
+```
+
+#### Tùy chọn:
+- `--file <path>`: Đường dẫn file từ vựng (`.csv` hoặc `.xlsx`) [Bắt buộc].
+- `--mapping <file>`: File cấu hình mapping (ví dụ: `scripts/vocab-mappings/en.json`, `zh.json`, `ja.json`). Suy ra ngôn ngữ trực tiếp từ cấu hình mapping.
+- `--lang <en|zh|ja>`: Ngôn ngữ (chỉ dùng khi không cung cấp `--mapping`).
+- `--all-sheets`: Đọc toàn bộ các sheet có cấu trúc hợp lệ trong file Excel theo đúng thứ tự. Tự động bỏ qua các sheet không đủ cột bắt buộc (như sheet hướng dẫn, ghi chú).
+- `--sheet <name>`: Chỉ định đọc một sheet cụ thể theo tên (chế độ sheet đơn).
+- `--no-sheet-name`: Tắt việc tự động thêm tên sheet vào trường `extra` (dưới khóa `"Sheet"`).
+- `--dry-run`: Chạy thử nghiệm, kiểm tra cú pháp và mapping, hiển thị bảng tổng kết theo sheet, **KHÔNG ghi vào database** (mặc định).
+- `--write`: Chạy ghi thật vào database (yêu cầu biến môi trường `SUPABASE_SERVICE_ROLE_KEY`).
+- `--merge-duplicates`: Nối các nghĩa bị trùng (cùng `term`, `reading`, `word_type`) bằng `"; "`. Mặc định giữ dòng đầu và bỏ qua các dòng sau.
+- `--overwrite`: Ghi đè `meaning_vi` và `reading` nếu từ đã tồn tại trong database (mặc định chỉ điền các trường còn trống, không xóa dữ liệu, không đổi id).
+
+#### Ví dụ:
+```bash
+# 1. Đọc thử file nhiều sheet với --all-sheets:
+npx tsx scripts/import-vocab.ts --file scripts/vocab-mappings/__samples__/sample-multisheet.xlsx --mapping scripts/vocab-mappings/en.json --all-sheets --dry-run
+
+# 2. Đọc thử 1 sheet cụ thể theo tên:
+npx tsx scripts/import-vocab.ts --file scripts/vocab-mappings/__samples__/sample-multisheet.xlsx --mapping scripts/vocab-mappings/en.json --sheet "Bai 2" --dry-run
+
+# 3. Đọc thử file tiếng Anh (.xlsx) mặc định (sheet đầu tiên):
+npx tsx scripts/import-vocab.ts --file scripts/vocab-mappings/__samples__/sample-valid.xlsx --mapping scripts/vocab-mappings/en.json --dry-run
+
+# 4. Đọc thử file tiếng Trung (.xlsx):
+npx tsx scripts/import-vocab.ts --file scripts/vocab-mappings/__samples__/zh-sample.xlsx --mapping scripts/vocab-mappings/zh.json --dry-run
+
+# 5. Đọc thử file tiếng Nhật (.csv):
+npx tsx scripts/import-vocab.ts --file scripts/vocab-mappings/__samples__/ja-sample.csv --mapping scripts/vocab-mappings/ja.json --dry-run
+```
+
+---
+
 ## 🏗️ Architecture
 
 ```

@@ -225,7 +225,7 @@ export default function AuthForm({
                   <button
                     type="button"
                     onClick={() => {
-                      setError('Vui lòng liên hệ admin để khôi phục mật khẩu.');
+                      setError('Chưa phát triển, nhịn.');
                     }}
                     className="text-[13px] text-[var(--accent)] hover:underline focus:outline-none cursor-pointer"
                   >
