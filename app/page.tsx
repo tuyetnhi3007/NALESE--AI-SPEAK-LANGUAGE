@@ -17,7 +17,9 @@ import Header from '@/components/Header';
 import VoiceTutor from '@/components/VoiceTutor';
 import VocabManager from '@/components/VocabManager';
 import TopicExercises from '@/components/TopicExercises';
+import FlashcardTab from '@/components/FlashcardTab';
 import { SettingsProvider } from '@/components/SettingsContext';
+import { LearnedVocabProvider } from '@/lib/vocab/context';
 import type { SupportedLanguage, AppTab, VocabEntry } from '@/lib/types';
 
 export default function Home() {
@@ -30,39 +32,47 @@ export default function Home() {
 
   return (
     <SettingsProvider>
-      <div className="app-shell flex flex-col">
-        <Header
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          selectedLanguage={language}
-          onLanguageChange={setLanguage}
-          latencyMs={latencyMs}
-        />
+      <LearnedVocabProvider>
+        <div className="app-shell flex flex-col">
+          <Header
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            selectedLanguage={language}
+            onLanguageChange={setLanguage}
+            latencyMs={latencyMs}
+          />
 
-        <main
-          className={`flex-1 ${
-            activeTab === 'voice'
-              ? 'app-main'
-              : activeTab === 'vocab'
-              ? 'app-main app-main-scrollable'
-              : 'app-main-topics'
-          }`}
-        >
-          {/* ── TAB: Gia Sư AI ── */}
-          {activeTab === 'voice' && (
-            <VoiceTutor language={language} onLanguageChange={setLanguage} />
-          )}
+          <main
+            className={`flex-1 ${
+              activeTab === 'voice'
+                ? 'app-main'
+                : activeTab === 'vocab'
+                ? 'app-main app-main-scrollable'
+                : activeTab === 'topics'
+                ? 'app-main-topics'
+                : 'app-main-flashcards'
+            }`}
+          >
+            {/* ── TAB: Gia Sư AI ── */}
+            {activeTab === 'voice' && (
+              <VoiceTutor language={language} onLanguageChange={setLanguage} />
+            )}
 
-          {/* ── TAB: Từ Vựng ── */}
-          {activeTab === 'vocab' && (
-            <VocabManager language={language} onVocabLoaded={handleVocabLoaded} />
-          )}
+            {/* ── TAB: Từ Vựng ── */}
+            {activeTab === 'vocab' && (
+              <VocabManager language={language} onVocabLoaded={handleVocabLoaded} />
+            )}
 
-          {/* ── TAB: Bài Tập Chủ Đề ── */}
-          {activeTab === 'topics' && (
-            <TopicExercises selectedLanguage={language} onLanguageChange={setLanguage} />
-          )}
-        </main>
+            {/* ── TAB: Bài Tập Chủ Đề ── */}
+            {activeTab === 'topics' && (
+              <TopicExercises selectedLanguage={language} onLanguageChange={setLanguage} />
+            )}
+
+            {/* ── TAB: Flashcard ── */}
+            {activeTab === 'flashcards' && (
+              <FlashcardTab />
+            )}
+          </main>
 
         {/* Footer — chỉ hiển thị ở tab Từ Vựng */}
         {activeTab === 'vocab' && (
@@ -72,7 +82,8 @@ export default function Home() {
             </p>
           </footer>
         )}
-      </div>
+        </div>
+      </LearnedVocabProvider>
     </SettingsProvider>
   );
 }

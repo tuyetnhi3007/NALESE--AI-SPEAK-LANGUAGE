@@ -6,7 +6,7 @@ export type SupportedLanguage = 'en' | 'zh' | 'ja';
 export type LanguageLevel = 'beginner' | 'intermediate' | 'advanced';
 export type TutorVoice = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer';
 export type MicMode = 'auto'; // Chỉ dùng auto-detect silence
-export type AppTab = 'voice' | 'vocab' | 'topics';
+export type AppTab = 'voice' | 'vocab' | 'topics' | 'flashcards';
 
 export interface VocabEntry {
   index: number;

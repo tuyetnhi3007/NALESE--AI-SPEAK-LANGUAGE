@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Mic, BookOpen, Target, Settings, Zap, LogIn, LogOut, User as UserIcon } from 'lucide-react';
+import { Mic, BookOpen, Target, Layers, Settings, Zap, LogIn, LogOut, User as UserIcon } from 'lucide-react';
 import SettingsModal from './SettingsModal';
 import AuthModal from './AuthModal';
 import { useSettings } from './SettingsContext';
@@ -24,9 +24,10 @@ interface HeaderProps {
 }
 
 const TABS: { id: AppTab; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
-  { id: 'voice',  label: 'Gia Sư AI',       icon: Mic },
-  { id: 'vocab',  label: 'Từ Vựng',          icon: BookOpen },
-  { id: 'topics', label: 'Bài Tập Chủ Đề',  icon: Target },
+  { id: 'voice',      label: 'Gia Sư AI',       icon: Mic },
+  { id: 'vocab',      label: 'Từ Vựng',          icon: BookOpen },
+  { id: 'topics',     label: 'Bài Tập Chủ Đề',  icon: Target },
+  { id: 'flashcards', label: 'Flashcard',        icon: Layers },
 ];
 
 export default function Header({
