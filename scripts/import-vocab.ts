@@ -15,7 +15,8 @@ import crypto from 'crypto';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { createClient } from '@supabase/supabase-js';
-
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
 export interface VocabMappingConfig {
   language: string;
   name: string;

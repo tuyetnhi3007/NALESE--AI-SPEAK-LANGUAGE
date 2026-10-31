@@ -1,6 +1,7 @@
 'use client';
 // components/FlashcardTab.tsx
 // Tab Flashcard học từ vựng hiệu quả - Ghi nhớ lâu dài
+// Hiệu ứng đổi thẻ: "thẻ chồng, đẩy thẻ cũ ra"
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
@@ -36,6 +37,232 @@ function shuffleArray<T>(array: T[]): T[] {
   return arr;
 }
 
+// ─── THỜI LƯỢNG HIỆU ỨNG ─────────────────────────────────
+const DECK_TRANSITION_MS = 380;
+
+// ─── COMPONENT THẺ FLASHCARD (TÁCH RIÊNG, KHÔNG TRONG RENDER) ──
+// Giữ nguyên cấu trúc lật 3D: perspective, preserve-3d, backfaceVisibility
+interface FlipCardProps {
+  card: FlashcardItem;
+  isFlipped: boolean;
+  onFlip: () => void;
+  onTTS: (e?: React.MouseEvent) => void;
+  isPlayingTTS: boolean;
+  isCurrentlyLearned: boolean;
+  termFontClass: string;
+  cardRef?: React.RefObject<HTMLDivElement | null>;
+}
+
+function FlipCard({
+  card,
+  isFlipped,
+  onFlip,
+  onTTS,
+  isPlayingTTS,
+  isCurrentlyLearned,
+  termFontClass,
+  cardRef,
+}: FlipCardProps) {
+  return (
+    <div
+      className="w-full h-full select-none"
+      style={{ perspective: '1000px' }}
+    >
+      <div
+        ref={cardRef}
+        role="button"
+        tabIndex={0}
+        aria-label={isFlipped ? 'Thẻ đang ở mặt sau. Nhấn để quay lại.' : 'Thẻ đang ở mặt trước. Nhấn để xem nghĩa.'}
+        onClick={onFlip}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onFlip();
+          }
+        }}
+        className="relative w-full h-full rounded-2xl cursor-pointer transition-transform duration-450 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+        style={{
+          transformStyle: 'preserve-3d',
+          transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
+        }}
+      >
+        {/* ── MẶT TRƯỚC (FRONT) ── */}
+        <div
+          className="absolute inset-0 rounded-2xl p-5 sm:p-6 flex flex-col justify-between"
+          style={{
+            backfaceVisibility: 'hidden',
+            backgroundColor: 'var(--card)',
+            border: '1px solid var(--accent)',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
+          }}
+        >
+          {/* Góc trên: Huy hiệu đã thuộc + Nút loa */}
+          <div className="flex items-center justify-between">
+            {isCurrentlyLearned ? (
+              <div
+                className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold"
+                style={{
+                  backgroundColor: '#E8F5EC',
+                  border: '1px solid #BFE3CC',
+                  color: '#2F7D5B',
+                }}
+              >
+                <Check size={12} strokeWidth={3} />
+                <span>Đã thuộc</span>
+              </div>
+            ) : (
+              <div />
+            )}
+
+            {/* Nút loa phát âm góc trên phải */}
+            <button
+              type="button"
+              onClick={onTTS}
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 cursor-pointer ${
+                isPlayingTTS ? 'animate-pulse' : ''
+              }`}
+              style={{
+                backgroundColor: 'var(--bubble-user)',
+                border: '1px solid var(--border)',
+                color: 'var(--accent)',
+              }}
+              title="Phát âm"
+              aria-label="Phát âm từ đích"
+            >
+              <Volume2 size={18} />
+            </button>
+          </div>
+
+          {/* Nội dung chính mặt trước */}
+          <div className="flex flex-col items-center justify-center text-center my-auto px-2">
+            <span
+              className={`text-[44px] sm:text-[56px] font-bold leading-tight ${termFontClass}`}
+              style={{ color: 'var(--text)' }}
+            >
+              {card.term}
+            </span>
+            {card.reading && (
+              <span
+                className="text-[20px] sm:text-[22px] font-bold mt-1 tracking-wide"
+                style={{ color: 'var(--accent)' }}
+              >
+                {card.reading}
+              </span>
+            )}
+            {card.word_type && (
+              <span className="text-[14px] sm:text-[15px] mt-0.5" style={{ color: 'var(--muted)' }}>
+                {card.word_type}
+              </span>
+            )}
+          </div>
+
+          {/* Gợi ý lật thẻ dưới đáy */}
+          <div
+            className="pt-2 flex items-center justify-center gap-1.5 text-[12px]"
+            style={{
+              borderTop: '1px solid var(--border)',
+              color: 'var(--muted)',
+            }}
+          >
+            <RefreshCw size={12} />
+            <span>Nhấn vào thẻ để xem nghĩa (Space)</span>
+          </div>
+        </div>
+
+        {/* ── MẶT SAU (BACK) ── */}
+        <div
+          className="absolute inset-0 rounded-2xl p-5 sm:p-6 flex flex-col justify-between"
+          style={{
+            backfaceVisibility: 'hidden',
+            transform: 'rotateY(180deg)',
+            backgroundColor: 'var(--card)',
+            border: '1px solid var(--accent)',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
+          }}
+        >
+          {/* Góc trên: Lặp lại từ đích nhỏ + Nút loa */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-baseline gap-2 min-w-0 pr-2">
+              <span className={`text-[18px] sm:text-[20px] font-bold truncate ${termFontClass}`} style={{ color: 'var(--muted)' }}>
+                {card.term}
+              </span>
+              {card.reading && (
+                <span className="text-[14px] font-medium truncate" style={{ color: 'var(--accent)' }}>
+                  {card.reading}
+                </span>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={onTTS}
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 cursor-pointer flex-shrink-0 ${
+                isPlayingTTS ? 'animate-pulse' : ''
+              }`}
+              style={{
+                backgroundColor: 'var(--bubble-user)',
+                border: '1px solid var(--border)',
+                color: 'var(--accent)',
+              }}
+              title="Phát âm"
+              aria-label="Phát âm từ đích"
+            >
+              <Volume2 size={18} />
+            </button>
+          </div>
+
+          {/* Nghĩa tiếng Việt cỡ lớn */}
+          <div className="flex flex-col items-center justify-center text-center my-auto px-4">
+            <p
+              className="text-[24px] sm:text-[28px] font-semibold leading-relaxed line-clamp-4"
+              style={{ color: 'var(--text)' }}
+            >
+              {card.meaning_vi}
+            </p>
+          </div>
+
+          {/* Dòng gợi ý lật lại */}
+          <div
+            className="pt-2 flex items-center justify-center gap-1.5 text-[12px]"
+            style={{
+              borderTop: '1px solid var(--border)',
+              color: 'var(--muted)',
+            }}
+          >
+            <RefreshCw size={12} />
+            <span>Nhấn để quay lại mặt trước</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Lớp trang trí rỗng (cùng viền, bo, nền card, không nội dung)
+function DeckShadowCard() {
+  return (
+    <div
+      className="w-full h-full rounded-2xl"
+      style={{
+        backgroundColor: 'var(--card)',
+        border: '1px solid var(--border)',
+      }}
+    />
+  );
+}
+
+// ─── Kiểu trạng thái thẻ rời ─────────────────────────────
+type LeavingState = {
+  card: FlashcardItem;
+  flipped: boolean; // giữ trạng thái lật khi bay đi
+  direction: 'left' | 'right';
+  isLast?: boolean;
+} | null;
+
+type EnteringState = {
+  card: FlashcardItem;
+} | null;
+
 export default function FlashcardTab() {
   const { counts, isLearned, markAsLearned, loadLearnedForLang } = useLearnedVocab();
 
@@ -62,10 +289,25 @@ export default function FlashcardTab() {
   const [isSessionComplete, setIsSessionComplete] = useState(false);
   const [sessionLearnedCount, setSessionLearnedCount] = useState(0);
 
-  // Animation lật qua thẻ kế tiếp
+  // Deck animation states
   const [isTransitioning, setIsTransitioning] = useState(false);
-  const [transitionDirection, setTransitionDirection] = useState<'next' | 'prev'>('next');
-  const [transitionPhase, setTransitionPhase] = useState<'idle' | 'out' | 'in'>('idle');
+  const [leavingState, setLeavingState] = useState<LeavingState>(null);
+  const [enteringState, setEnteringState] = useState<EnteringState>(null);
+  const [isRising, setIsRising] = useState(false);
+  const [isSinking, setIsSinking] = useState(false);
+  const transitionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Dọn dẹp timeout khi unmount
+  useEffect(() => {
+    return () => {
+      if (transitionTimeoutRef.current) {
+        clearTimeout(transitionTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Session reset fade key
+  const [fadeKey, setFadeKey] = useState(0);
 
   // TTS
   const [isPlayingTTS, setIsPlayingTTS] = useState(false);
@@ -76,6 +318,9 @@ export default function FlashcardTab() {
 
   // Thẻ flashcard element ref để focus
   const cardRef = useRef<HTMLDivElement>(null);
+
+  // Aria-live thông báo cho trình đọc màn hình
+  const [ariaAnnounce, setAriaAnnounce] = useState('');
 
   // ─── 1. Khởi tạo User & Ngôn ngữ lưu trữ ─────────────────────
   useEffect(() => {
@@ -168,9 +413,53 @@ export default function FlashcardTab() {
       setIsFlipped(false);
       setIsSessionComplete(false);
       setSessionLearnedCount(0);
+      // Xóa trạng thái chuyển cũ
+      if (transitionTimeoutRef.current) {
+        clearTimeout(transitionTimeoutRef.current);
+        transitionTimeoutRef.current = null;
+      }
+      setIsTransitioning(false);
+      setLeavingState(null);
+      setEnteringState(null);
+      setIsRising(false);
+      setIsSinking(false);
+      // Hiệu ứng mờ dần khi đổi session
+      setFadeKey((k) => k + 1);
     },
     [mode, vocabList, isLearned, selectedLanguage]
   );
+
+  // Hoàn tất animation đổi thẻ (gọi từ animationend hoặc timeout an toàn 450ms)
+  const finalizeTransition = useCallback(() => {
+    if (transitionTimeoutRef.current) {
+      clearTimeout(transitionTimeoutRef.current);
+      transitionTimeoutRef.current = null;
+    }
+
+    setLeavingState((prevLeaving) => {
+      if (prevLeaving?.isLast) {
+        setIsSessionComplete(true);
+      }
+      return null;
+    });
+
+    setEnteringState((prevEntering) => {
+      if (prevEntering) {
+        setCurrentIndex((prev) => Math.max(0, prev - 1));
+        setIsFlipped(false);
+      }
+      return null;
+    });
+
+    setIsRising(false);
+    setIsSinking(false);
+    setIsTransitioning(false);
+
+    // Focus lại thẻ mới
+    setTimeout(() => {
+      cardRef.current?.focus();
+    }, 0);
+  }, []);
 
   // Ref giữ phiên bản mới nhất của startSession — dùng trong effect
   // để tránh vòng lặp phụ thuộc (isLearned thay đổi → startSession mới
@@ -190,43 +479,49 @@ export default function FlashcardTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vocabList, mode]);
 
-  // ─── 4. Điều hướng thẻ với Animation lật qua (280ms) ──────────
+  // ─── 4. Điều hướng thẻ: Bay thẻ cũ ra, thẻ mới nổi lên ──────
   const navigateCard = useCallback(
-    (direction: 'next' | 'prev') => {
+    (direction: 'next' | 'prev', flyDirection?: 'left' | 'right') => {
       if (isTransitioning || sessionCards.length === 0) return;
 
+      if (transitionTimeoutRef.current) {
+        clearTimeout(transitionTimeoutRef.current);
+      }
+      // Timeout an toàn 450ms phòng khi animationend không fire
+      transitionTimeoutRef.current = setTimeout(() => {
+        finalizeTransition();
+      }, 450);
+
       if (direction === 'next') {
-        if (currentIndex >= sessionCards.length - 1) {
-          // Hoàn thành lượt học
-          setIsSessionComplete(true);
-          return;
+        const current = sessionCards[currentIndex];
+        const fly = flyDirection || 'left';
+        const isLastCard = currentIndex >= sessionCards.length - 1;
+
+        setIsTransitioning(true);
+        setLeavingState({
+          card: current,
+          flipped: isFlipped,
+          direction: fly,
+          isLast: isLastCard,
+        });
+
+        if (!isLastCard) {
+          // Chuyển current sang thẻ mới ngay, thẻ mới nổi lên và luôn ở mặt trước
+          setCurrentIndex((prev) => prev + 1);
+          setIsFlipped(false);
+          setIsRising(true);
         }
       } else {
+        // Prev: Thẻ trước bay VÀO từ trái (keyframes ngược) phủ lên thẻ hiện tại
         if (currentIndex <= 0) return;
+
+        const prevCard = sessionCards[currentIndex - 1];
+        setIsTransitioning(true);
+        setEnteringState({ card: prevCard });
+        setIsSinking(true);
       }
-
-      setIsTransitioning(true);
-      setTransitionDirection(direction);
-      setTransitionPhase('out');
-
-      // Giai đoạn 1: Xoay ra (280ms)
-      setTimeout(() => {
-        if (direction === 'next') {
-          setCurrentIndex((prev) => prev + 1);
-        } else {
-          setCurrentIndex((prev) => prev - 1);
-        }
-        setIsFlipped(false); // Thẻ mới luôn ở mặt trước
-        setTransitionPhase('in');
-
-        // Giai đoạn 2: Xoay vào (280ms)
-        setTimeout(() => {
-          setTransitionPhase('idle');
-          setIsTransitioning(false);
-        }, 280);
-      }, 280);
     },
-    [currentIndex, sessionCards.length, isTransitioning]
+    [currentIndex, sessionCards, isTransitioning, isFlipped, finalizeTransition]
   );
 
   // Lật thẻ (Toggle Mặt trước / Mặt sau)
@@ -238,7 +533,7 @@ export default function FlashcardTab() {
   // ─── 5. Đã thuộc / Chưa thuộc ───────────────────────────────
   const currentCard = sessionCards[currentIndex];
 
-  const handleMarkLearned = async () => {
+  const handleMarkLearned = () => {
     if (!currentCard || isTransitioning) return;
 
     const cardId = currentCard.id;
@@ -246,23 +541,21 @@ export default function FlashcardTab() {
 
     if (!wasAlreadyLearned) {
       setSessionLearnedCount((prev) => prev + 1);
-      try {
-        await markAsLearned(selectedLanguage, cardId);
-      } catch (err: any) {
+      markAsLearned(selectedLanguage, cardId).catch((err: any) => {
         setSessionLearnedCount((prev) => Math.max(0, prev - 1));
         setToastMessage('Lỗi kết nối khi lưu trạng thái đã thuộc.');
         setTimeout(() => setToastMessage(null), 3000);
-      }
+      });
     }
 
-    // Chuyển sang thẻ kế tiếp
-    navigateCard('next');
+    // Bay sang PHẢI ngay lập tức (cập nhật lạc quan)
+    navigateCard('next', 'right');
   };
 
   const handleMarkUnlearned = () => {
     if (!currentCard || isTransitioning) return;
-    // Chưa thuộc: chỉ chuyển sang thẻ kế tiếp, không đổi dữ liệu
-    navigateCard('next');
+    // Bay sang TRÁI ngay lập tức
+    navigateCard('next', 'left');
   };
 
   // ─── 6. Phát âm TTS ──────────────────────────────────────────
@@ -295,10 +588,17 @@ export default function FlashcardTab() {
     }
   }, [currentIndex, selectedLanguage]);
 
+  // Aria-live thông báo khi đổi thẻ
+  useEffect(() => {
+    if (sessionCards.length > 0 && !isSessionComplete) {
+      setAriaAnnounce(`Thẻ ${currentIndex + 1} trên ${sessionCards.length}`);
+    }
+  }, [currentIndex, sessionCards.length, isSessionComplete]);
+
   // ─── 7. Phím tắt: Space lật thẻ, Mũi tên trái/phải đổi thẻ ────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (myVocabOpen) return;
+      if (myVocabOpen || isTransitioning) return;
 
       // Bỏ qua khi đang gõ vào ô nhập liệu
       const target = e.target as HTMLElement;
@@ -315,7 +615,7 @@ export default function FlashcardTab() {
         toggleFlip();
       } else if (e.code === 'ArrowRight') {
         e.preventDefault();
-        navigateCard('next');
+        navigateCard('next', 'left');
       } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
         navigateCard('prev');
@@ -324,7 +624,7 @@ export default function FlashcardTab() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleFlip, navigateCard, myVocabOpen]);
+  }, [toggleFlip, navigateCard, myVocabOpen, isTransitioning]);
 
   // Font theo ngôn ngữ
   const termFontClass =
@@ -337,25 +637,10 @@ export default function FlashcardTab() {
   const totalLearnedCount = counts[selectedLanguage] ?? 0;
   const grandTotalLearned = counts.total ?? 0;
 
-  // Tính toán transform xoay cho hiệu ứng chuyển thẻ
-  const getCardTransitionStyle = () => {
-    if (transitionPhase === 'out') {
-      const deg = transitionDirection === 'next' ? -90 : 90;
-      return {
-        transform: `rotateY(${deg}deg)`,
-        opacity: 0.7,
-        transition: 'transform 280ms ease-in, opacity 280ms ease-in',
-      };
-    }
-    if (transitionPhase === 'in') {
-      return {
-        transform: 'rotateY(0deg)',
-        opacity: 1,
-        transition: 'transform 280ms ease-out, opacity 280ms ease-out',
-      };
-    }
-    return {};
-  };
+  // Thẻ kế tiếp (hiện mặt trước ở lớp peek)
+  const nextCard = sessionCards[currentIndex + 1] ?? null;
+  // Có lớp thứ 3 không?
+  const hasThirdLayer = currentIndex + 2 < sessionCards.length;
 
   return (
     <div className="w-full flex-1 flex flex-col justify-between max-w-5xl mx-auto px-4 py-3 sm:py-4 gap-3">
@@ -416,10 +701,12 @@ export default function FlashcardTab() {
           backgroundColor: 'var(--card)',
           border: '1px solid var(--border)',
           minHeight: '430px',
+          overflow: 'hidden', // Cắt thẻ bay ra ngoài
+          position: 'relative',
         }}
       >
         {/* Hàng trên: Bộ chọn chế độ nhỏ + Tiến độ + Nút Từ vựng của tôi */}
-        <div className="flex flex-col gap-2.5 flex-shrink-0">
+        <div className="flex flex-col gap-2.5 flex-shrink-0" style={{ position: 'relative', zIndex: 10 }}>
           <div className="flex items-center justify-between gap-2">
             {/* Bộ chọn chế độ */}
             <div
@@ -634,7 +921,7 @@ export default function FlashcardTab() {
               </div>
             </div>
           ) : (
-            // THẺ FLASHCARD 3D CHÍNH
+            // ═══ KHUNG DECK STAGE: THẺ CHỒNG 3 LỚP ═══
             <div className="w-full flex items-center justify-center gap-3 sm:gap-6">
               {/* Nút tròn ‹ */}
               <button
@@ -646,6 +933,8 @@ export default function FlashcardTab() {
                   border: '1px solid var(--border)',
                   backgroundColor: 'var(--card)',
                   color: 'var(--text)',
+                  position: 'relative',
+                  zIndex: 10,
                 }}
                 title="Thẻ trước (←)"
                 aria-label="Về thẻ trước"
@@ -653,192 +942,117 @@ export default function FlashcardTab() {
                 <ChevronLeft size={20} />
               </button>
 
-              {/* Khung thẻ 3D */}
-              <div
-                className="w-full max-w-[520px] h-[260px] sm:h-[280px] select-none"
-                style={{
-                  perspective: '1000px',
-                  ...getCardTransitionStyle(),
-                }}
-              >
-                <div
-                  ref={cardRef}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={isFlipped ? 'Thẻ đang ở mặt sau. Nhấn để quay lại.' : 'Thẻ đang ở mặt trước. Nhấn để xem nghĩa.'}
-                  onClick={toggleFlip}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      toggleFlip();
-                    }
-                  }}
-                  className="relative w-full h-full rounded-2xl cursor-pointer transition-transform duration-450 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                  style={{
-                    transformStyle: 'preserve-3d',
-                    transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
-                  }}
-                >
-                  {/* ── MẶT TRƯỚC (FRONT) ── */}
+              {/* Deck stage */}
+              <div className={`deck-stage ${fadeKey > 0 ? 'deck-fade-reset' : ''}`} key={fadeKey}>
+                {/* Lớp 3: Thẻ trang trí rỗng (đáy) */}
+                {hasThirdLayer && !leavingState && !enteringState && (
+                  <div className="deck-item deck-item-shadow" aria-hidden="true">
+                    <DeckShadowCard />
+                  </div>
+                )}
+
+                {/* Lớp 2: Thẻ kế tiếp (peek) */}
+                {nextCard && !enteringState && (
+                  <div className="deck-item deck-item-next" aria-hidden="true">
+                    <FlipCard
+                      key={nextCard.id}
+                      card={nextCard}
+                      isFlipped={false}
+                      onFlip={() => {}}
+                      onTTS={() => {}}
+                      isPlayingTTS={false}
+                      isCurrentlyLearned={isLearned(selectedLanguage, nextCard.id)}
+                      termFontClass={termFontClass}
+                    />
+                  </div>
+                )}
+
+                {/* Lớp 1: Thẻ hiện tại (hoặc đang lùi xuống khi có thẻ đang bay vào từ trái) */}
+                {currentCard && !enteringState && !leavingState?.isLast && (
                   <div
-                    className="absolute inset-0 rounded-2xl p-5 sm:p-6 flex flex-col justify-between"
-                    style={{
-                      backfaceVisibility: 'hidden',
-                      backgroundColor: 'var(--card)',
-                      border: '1px solid var(--accent)',
-                      boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
+                    className={`deck-item ${
+                      isRising
+                        ? 'deck-item-rising'
+                        : isSinking
+                        ? 'deck-item-sinking'
+                        : 'deck-item-current'
+                    }`}
+                  >
+                    <FlipCard
+                      key={currentCard.id}
+                      card={currentCard}
+                      isFlipped={isFlipped}
+                      onFlip={toggleFlip}
+                      onTTS={playCurrentTTS}
+                      isPlayingTTS={isPlayingTTS}
+                      isCurrentlyLearned={isLearned(selectedLanguage, currentCard.id)}
+                      termFontClass={termFontClass}
+                      cardRef={cardRef}
+                    />
+                  </div>
+                )}
+
+                {/* Thẻ cũ đang rời đi (bay sang phải hoặc trái) - Nằm trên cùng */}
+                {leavingState && (
+                  <div
+                    className={`deck-item ${
+                      leavingState.direction === 'right'
+                        ? 'deck-item-leaving-right'
+                        : 'deck-item-leaving-left'
+                    }`}
+                    aria-hidden="true"
+                    onAnimationEnd={(e) => {
+                      if (e.target === e.currentTarget) finalizeTransition();
                     }}
                   >
-                    {/* Góc trên: Huy hiệu đã thuộc + Nút loa */}
-                    <div className="flex items-center justify-between">
-                      {isLearned(selectedLanguage, currentCard.id) ? (
-                        <div
-                          className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold"
-                          style={{
-                            backgroundColor: '#E8F5EC',
-                            border: '1px solid #BFE3CC',
-                            color: '#2F7D5B',
-                          }}
-                        >
-                          <Check size={12} strokeWidth={3} />
-                          <span>Đã thuộc</span>
-                        </div>
-                      ) : (
-                        <div />
-                      )}
-
-                      {/* Nút loa phát âm góc trên phải */}
-                      <button
-                        type="button"
-                        onClick={playCurrentTTS}
-                        className={`w-9 h-9 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 cursor-pointer ${
-                          isPlayingTTS ? 'animate-pulse' : ''
-                        }`}
-                        style={{
-                          backgroundColor: 'var(--bubble-user)',
-                          border: '1px solid var(--border)',
-                          color: 'var(--accent)',
-                        }}
-                        title="Phát âm"
-                        aria-label="Phát âm từ đích"
-                      >
-                        <Volume2 size={18} />
-                      </button>
-                    </div>
-
-                    {/* Nội dung chính mặt trước */}
-                    <div className="flex flex-col items-center justify-center text-center my-auto px-2">
-                      <span
-                        className={`text-[44px] sm:text-[56px] font-bold leading-tight ${termFontClass}`}
-                        style={{ color: 'var(--text)' }}
-                      >
-                        {currentCard.term}
-                      </span>
-                      {currentCard.reading && (
-                        <span
-                          className="text-[20px] sm:text-[22px] font-bold mt-1 tracking-wide"
-                          style={{ color: 'var(--accent)' }}
-                        >
-                          {currentCard.reading}
-                        </span>
-                      )}
-                      {currentCard.word_type && (
-                        <span className="text-[14px] sm:text-[15px] mt-0.5" style={{ color: 'var(--muted)' }}>
-                          {currentCard.word_type}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Gợi ý lật thẻ dưới đáy */}
-                    <div
-                      className="pt-2 flex items-center justify-center gap-1.5 text-[12px]"
-                      style={{
-                        borderTop: '1px solid var(--border)',
-                        color: 'var(--muted)',
-                      }}
-                    >
-                      <RefreshCw size={12} />
-                      <span>Nhấn vào thẻ để xem nghĩa (Space)</span>
-                    </div>
+                    <FlipCard
+                      key={leavingState.card.id}
+                      card={leavingState.card}
+                      isFlipped={leavingState.flipped}
+                      onFlip={() => {}}
+                      onTTS={() => {}}
+                      isPlayingTTS={false}
+                      isCurrentlyLearned={isLearned(selectedLanguage, leavingState.card.id)}
+                      termFontClass={termFontClass}
+                    />
                   </div>
+                )}
 
-                  {/* ── MẶT SAU (BACK) ── */}
+                {/* Thẻ trước đang bay vào (prev) - Nằm trên cùng phủ lên thẻ hiện tại */}
+                {enteringState && (
                   <div
-                    className="absolute inset-0 rounded-2xl p-5 sm:p-6 flex flex-col justify-between"
-                    style={{
-                      backfaceVisibility: 'hidden',
-                      transform: 'rotateY(180deg)',
-                      backgroundColor: 'var(--card)',
-                      border: '1px solid var(--accent)',
-                      boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
+                    className="deck-item deck-item-entering-left"
+                    aria-hidden="true"
+                    onAnimationEnd={(e) => {
+                      if (e.target === e.currentTarget) finalizeTransition();
                     }}
                   >
-                    {/* Góc trên: Lặp lại từ đích nhỏ + Nút loa */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-baseline gap-2 min-w-0 pr-2">
-                        <span className={`text-[18px] sm:text-[20px] font-bold truncate ${termFontClass}`} style={{ color: 'var(--muted)' }}>
-                          {currentCard.term}
-                        </span>
-                        {currentCard.reading && (
-                          <span className="text-[14px] font-medium truncate" style={{ color: 'var(--accent)' }}>
-                            {currentCard.reading}
-                          </span>
-                        )}
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={playCurrentTTS}
-                        className={`w-9 h-9 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 cursor-pointer flex-shrink-0 ${
-                          isPlayingTTS ? 'animate-pulse' : ''
-                        }`}
-                        style={{
-                          backgroundColor: 'var(--bubble-user)',
-                          border: '1px solid var(--border)',
-                          color: 'var(--accent)',
-                        }}
-                        title="Phát âm"
-                        aria-label="Phát âm từ đích"
-                      >
-                        <Volume2 size={18} />
-                      </button>
-                    </div>
-
-                    {/* Nghĩa tiếng Việt cỡ lớn */}
-                    <div className="flex flex-col items-center justify-center text-center my-auto px-4">
-                      <p
-                        className="text-[24px] sm:text-[28px] font-semibold leading-relaxed line-clamp-4"
-                        style={{ color: 'var(--text)' }}
-                      >
-                        {currentCard.meaning_vi}
-                      </p>
-                    </div>
-
-                    {/* Dòng gợi ý lật lại */}
-                    <div
-                      className="pt-2 flex items-center justify-center gap-1.5 text-[12px]"
-                      style={{
-                        borderTop: '1px solid var(--border)',
-                        color: 'var(--muted)',
-                      }}
-                    >
-                      <RefreshCw size={12} />
-                      <span>Nhấn để quay lại mặt trước</span>
-                    </div>
+                    <FlipCard
+                      key={enteringState.card.id}
+                      card={enteringState.card}
+                      isFlipped={false}
+                      onFlip={() => {}}
+                      onTTS={() => {}}
+                      isPlayingTTS={false}
+                      isCurrentlyLearned={isLearned(selectedLanguage, enteringState.card.id)}
+                      termFontClass={termFontClass}
+                    />
                   </div>
-                </div>
+                )}
               </div>
 
               {/* Nút tròn › */}
               <button
                 type="button"
-                onClick={() => navigateCard('next')}
+                onClick={() => navigateCard('next', 'left')}
                 disabled={isTransitioning}
                 className="hidden md:flex w-10 h-10 rounded-full items-center justify-center transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
                 style={{
                   border: '1px solid var(--border)',
                   backgroundColor: 'var(--card)',
                   color: 'var(--text)',
+                  position: 'relative',
+                  zIndex: 10,
                 }}
                 title="Thẻ sau (→)"
                 aria-label="Sang thẻ kế tiếp"
@@ -851,7 +1065,7 @@ export default function FlashcardTab() {
 
         {/* Nút điều hướng phụ trên màn hình hẹp (< 900px) */}
         {!loading && !error && sessionCards.length > 0 && !isSessionComplete && (
-          <div className="flex md:hidden items-center justify-center gap-6 py-1">
+          <div className="flex md:hidden items-center justify-center gap-6 py-1" style={{ position: 'relative', zIndex: 10 }}>
             <button
               type="button"
               onClick={() => navigateCard('prev')}
@@ -866,7 +1080,7 @@ export default function FlashcardTab() {
             </span>
             <button
               type="button"
-              onClick={() => navigateCard('next')}
+              onClick={() => navigateCard('next', 'left')}
               disabled={isTransitioning}
               className="w-10 h-10 rounded-full flex items-center justify-center border border-[var(--border)] bg-[var(--bg)] disabled:opacity-30"
               aria-label="Thẻ sau"
@@ -878,7 +1092,7 @@ export default function FlashcardTab() {
 
         {/* Hai nút hành động dưới thẻ: Đã thuộc & Chưa thuộc */}
         {!loading && !error && sessionCards.length > 0 && !isSessionComplete && (
-          <div className="flex items-center justify-center gap-3 sm:gap-4 pt-2 flex-shrink-0">
+          <div className="flex items-center justify-center gap-3 sm:gap-4 pt-2 flex-shrink-0" style={{ position: 'relative', zIndex: 10 }}>
             <button
               type="button"
               onClick={handleMarkLearned}
@@ -959,6 +1173,11 @@ export default function FlashcardTab() {
         initialLanguage={selectedLanguage}
         resumeButtonRef={myVocabBtnRef}
       />
+
+      {/* Aria-live thông báo cho trình đọc màn hình */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {ariaAnnounce}
+      </div>
 
       {/* Toast thông báo lỗi nhỏ */}
       {toastMessage && (

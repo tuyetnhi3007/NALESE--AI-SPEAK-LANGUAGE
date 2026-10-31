@@ -149,11 +149,201 @@ body {
   }
 }
 
+/* ─── DECK STAGE: HIỆU ỨNG THẺ CHỒNG, ĐẨY THẺ CŨ RA ─── */
+.deck-stage {
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  height: 260px;
+}
+@media (min-width: 640px) {
+  .deck-stage {
+    height: 280px;
+  }
+}
+
+/* Từng lớp thẻ xếp chồng bằng absolute */
+.deck-item {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
+}
+
+/* Lớp thẻ hiện tại (z-index cao nhất) */
+.deck-item-current {
+  z-index: 3;
+}
+
+/* Lớp thẻ kế tiếp (peek, hơi nhỏ và thấp hơn) */
+.deck-item-next {
+  z-index: 2;
+  transform: translateY(12px) scale(0.96);
+  pointer-events: none;
+}
+
+/* Lớp trang trí rỗng (nhỏ nhất, thấp nhất) */
+.deck-item-shadow {
+  z-index: 1;
+  transform: translateY(24px) scale(0.92);
+  pointer-events: none;
+}
+
+/* Thẻ đang rời: bay sang PHẢI (Đã thuộc) - z-index cao nhất, pointer-events: none */
+.deck-item-leaving-right {
+  z-index: 5;
+  pointer-events: none;
+  animation: deckFlyRight 380ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* Thẻ đang rời: bay sang TRÁI (Chưa thuộc / ›) - z-index cao nhất, pointer-events: none */
+.deck-item-leaving-left {
+  z-index: 5;
+  pointer-events: none;
+  animation: deckFlyLeft 380ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* Thẻ trước bay VÀO từ bên trái (nút ‹) - z-index cao nhất phủ lên thẻ hiện tại */
+.deck-item-entering-left {
+  z-index: 5;
+  pointer-events: none;
+  animation: deckFlyInLeft 380ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* Nổi lên từ vị trí kế tiếp thành vị trí hiện tại (translateY(12px) scale(0.96) -> translateY(0) scale(1)) */
+.deck-item-rising {
+  z-index: 3;
+  animation: deckRise 380ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  will-change: transform;
+}
+
+/* Lùi xuống: từ hiện tại thành vị trí kế tiếp khi ấn nút ‹ */
+.deck-item-sinking {
+  z-index: 2;
+  pointer-events: none;
+  animation: deckSink 380ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  will-change: transform;
+}
+
+/* ── Keyframes cho hiệu ứng đổi thẻ ── */
+/* Bay sang phải: từ transform none, opacity 1 đến translateX(130%) rotate(12deg), opacity 0 (opacity chỉ giảm ở nửa sau) */
+@keyframes deckFlyRight {
+  0% {
+    transform: none;
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(65%) rotate(6deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(130%) rotate(12deg);
+    opacity: 0;
+  }
+}
+
+/* Bay sang trái: từ transform none, opacity 1 đến translateX(-130%) rotate(-12deg), opacity 0 (opacity chỉ giảm ở nửa sau) */
+@keyframes deckFlyLeft {
+  0% {
+    transform: none;
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(-65%) rotate(-6deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(-130%) rotate(-12deg);
+    opacity: 0;
+  }
+}
+
+/* Bay vào từ trái: từ translateX(-130%) rotate(-12deg), opacity 0 về none, opacity 1 */
+@keyframes deckFlyInLeft {
+  0% {
+    transform: translateX(-130%) rotate(-12deg);
+    opacity: 0;
+  }
+  50% {
+    transform: translateX(-65%) rotate(-6deg);
+    opacity: 1;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* Nổi lên: từ translateY(12px) scale(0.96) về translateY(0) scale(1) */
+@keyframes deckRise {
+  0% {
+    transform: translateY(12px) scale(0.96);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Lùi xuống: từ translateY(0) scale(1) về translateY(12px) scale(0.96) */
+@keyframes deckSink {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    transform: translateY(12px) scale(0.96);
+  }
+}
+
+/* Mờ dần khi đổi ngôn ngữ / chế độ (không bay) */
+.deck-fade-reset {
+  animation: deckFadeIn 150ms ease-out;
+}
+@keyframes deckFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ─── prefers-reduced-motion: crossfade 150ms thay vì bay ─── */
+@keyframes deckCrossFadeOut {
+  0% {
+    transform: none;
+    opacity: 1;
+  }
+  100% {
+    transform: none;
+    opacity: 0;
+  }
+}
+
+@keyframes deckCrossFadeIn {
+  0% {
+    transform: none;
+    opacity: 0;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 150ms !important;
+  .deck-stage .deck-item-leaving-right,
+  .deck-stage .deck-item-leaving-left {
+    animation: deckCrossFadeOut 150ms ease-out forwards !important;
+    animation-duration: 150ms !important;
+    transform: none !important;
+  }
+  .deck-stage .deck-item-entering-left {
+    animation: deckCrossFadeIn 150ms ease-out forwards !important;
+    animation-duration: 150ms !important;
+    transform: none !important;
+  }
+  .deck-stage .deck-item-rising,
+  .deck-stage .deck-item-sinking {
+    animation: none !important;
+    transform: none !important;
   }
 }
 
