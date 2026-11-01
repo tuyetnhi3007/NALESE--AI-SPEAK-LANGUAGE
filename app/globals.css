@@ -154,12 +154,7 @@ body {
   position: relative;
   width: 100%;
   max-width: 520px;
-  height: 260px;
-}
-@media (min-width: 640px) {
-  .deck-stage {
-    height: 280px;
-  }
+  height: clamp(260px, 38vh, 340px);
 }
 
 /* Từng lớp thẻ xếp chồng bằng absolute */

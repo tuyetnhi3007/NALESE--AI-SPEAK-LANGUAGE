@@ -27,6 +27,34 @@ import { FlagCN, FlagJP, FlagGB } from './MyVocabModal';
 import MyVocabModal from './MyVocabModal';
 import { createClient } from '@/lib/supabase/client';
 
+// ─── HELPERS: Auto-scale text & split notes ─────────────────
+// Split trailing parenthesized note: "February (abbr Feb)" → { main: "February", note: "abbr Feb" }
+const NOTE_RE = /^(.+?)\s*[\(（](.+)[\)）]\s*$/;
+function splitNote(text: string): { main: string; note: string | null } {
+  const m = NOTE_RE.exec(text);
+  if (m) return { main: m[1].trim(), note: m[2].trim() };
+  return { main: text, note: null };
+}
+
+// Dynamic font-size for the front-face term: shrinks for longer text
+function termFontSize(text: string): string {
+  const len = text.length;
+  if (len <= 4) return 'clamp(36px, 8vw, 56px)';
+  if (len <= 8) return 'clamp(30px, 6.5vw, 44px)';
+  if (len <= 14) return 'clamp(24px, 5vw, 36px)';
+  if (len <= 22) return 'clamp(20px, 4vw, 30px)';
+  return 'clamp(16px, 3.5vw, 26px)';
+}
+
+// Dynamic font-size for meaning_vi on the back face
+function meaningFontSize(text: string): string {
+  const len = text.length;
+  if (len <= 12) return 'clamp(22px, 5vw, 28px)';
+  if (len <= 30) return 'clamp(18px, 4vw, 24px)';
+  if (len <= 60) return 'clamp(16px, 3.5vw, 20px)';
+  return 'clamp(14px, 3vw, 18px)';
+}
+
 // Thuật toán xáo trộn Fisher-Yates
 function shuffleArray<T>(array: T[]): T[] {
   const arr = [...array];
@@ -133,14 +161,38 @@ function FlipCard({
             </button>
           </div>
 
-          {/* Nội dung chính mặt trước */}
-          <div className="flex flex-col items-center justify-center text-center my-auto px-2">
-            <span
-              className={`text-[44px] sm:text-[56px] font-bold leading-tight ${termFontClass}`}
-              style={{ color: 'var(--text)' }}
-            >
-              {card.term}
-            </span>
+          {/* Nội dung chính mặt trước — auto-scale + split note */}
+          <div className="flex flex-col items-center justify-center text-center my-auto px-2 min-h-0 overflow-hidden">
+            {(() => {
+              const { main, note } = splitNote(card.term);
+              return (
+                <>
+                  <span
+                    className={`font-bold leading-tight line-clamp-3 ${termFontClass}`}
+                    style={{
+                      color: 'var(--text)',
+                      fontSize: termFontSize(main),
+                      overflowWrap: 'anywhere',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {main}
+                  </span>
+                  {note && (
+                    <span
+                      className="mt-0.5 leading-snug line-clamp-2"
+                      style={{
+                        color: 'var(--muted)',
+                        fontSize: '16px',
+                        overflowWrap: 'anywhere',
+                      }}
+                    >
+                      ({note})
+                    </span>
+                  )}
+                </>
+              );
+            })()}
             {card.reading && (
               <span
                 className="text-[20px] sm:text-[22px] font-bold mt-1 tracking-wide"
@@ -211,11 +263,16 @@ function FlipCard({
             </button>
           </div>
 
-          {/* Nghĩa tiếng Việt cỡ lớn */}
-          <div className="flex flex-col items-center justify-center text-center my-auto px-4">
+          {/* Nghĩa tiếng Việt cỡ lớn — auto-scale */}
+          <div className="flex flex-col items-center justify-center text-center my-auto px-4 min-h-0 overflow-hidden">
             <p
-              className="text-[24px] sm:text-[28px] font-semibold leading-relaxed line-clamp-4"
-              style={{ color: 'var(--text)' }}
+              className="font-semibold leading-relaxed line-clamp-4"
+              style={{
+                color: 'var(--text)',
+                fontSize: meaningFontSize(card.meaning_vi),
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word',
+              }}
             >
               {card.meaning_vi}
             </p>
@@ -269,6 +326,8 @@ export default function FlashcardTab() {
   // Ngôn ngữ đang chọn (lưu trong localStorage theo user id)
   const [selectedLanguage, setSelectedLanguage] = useState<SupportedLanguage>('zh');
   const [userId, setUserId] = useState<string | null>(null);
+  // Cờ: đã đọc xong ngôn ngữ đã lưu từ localStorage chưa? — ngăn fetch với 'zh' mặc định
+  const [languageReady, setLanguageReady] = useState(false);
 
   // Modal "Từ vựng của tôi"
   const [myVocabOpen, setMyVocabOpen] = useState(false);
@@ -323,6 +382,8 @@ export default function FlashcardTab() {
   const [ariaAnnounce, setAriaAnnounce] = useState('');
 
   // ─── 1. Khởi tạo User & Ngôn ngữ lưu trữ ─────────────────────
+  // Đọc user → đọc localStorage → setSelectedLanguage → setLanguageReady(true)
+  // Chỉ khi languageReady = true thì mới bắt đầu fetch vocab.
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getUser().then(({ data }) => {
@@ -334,6 +395,8 @@ export default function FlashcardTab() {
           setSelectedLanguage(savedLang);
         }
       } catch {}
+      // Đánh dấu đã sẵn sàng — dù có savedLang hay không
+      setLanguageReady(true);
     });
   }, []);
 
@@ -367,9 +430,12 @@ export default function FlashcardTab() {
     }
   }, [loadLearnedForLang]);
 
+  // Chỉ fetch khi languageReady = true → tránh fetch dư với 'zh' mặc định trước khi
+  // đọc xong ngôn ngữ đã lưu từ localStorage.
   useEffect(() => {
+    if (!languageReady) return;
     loadVocab(selectedLanguage);
-  }, [selectedLanguage, loadVocab]);
+  }, [selectedLanguage, loadVocab, languageReady]);
 
   // ─── 3. Khởi tạo Lượt học (20 thẻ ngẫu nhiên) ────────────────
   const startSession = useCallback(
